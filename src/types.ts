@@ -57,6 +57,7 @@ export interface MapEntity {
 export interface FloorData {
   id: string;
   name: string;
+  unconditioned?: boolean;
   entities: MapEntity[];
   wallPoints: WallPoint[];
   wallSegments: WallSegment[];
@@ -109,9 +110,11 @@ export type EditorAction =
   | { type: "SET_ADDRESS"; address: string }
   | { type: "SET_DEFAULT_WINDOW_SIZE"; widthFt: number; heightFt: number }
   | { type: "SET_AVG_CEILING"; value: number }
-  | { type: "ADD_LEVEL"; floorName: string }
+  | { type: "ADD_LEVEL"; floorName: string; unconditioned: boolean }
+  | { type: "DELETE_LEVEL"; floorId: string }
   | { type: "SET_ACTIVE_FLOOR"; floorId: string }
-  | { type: "RENAME_LEVEL"; floorId: string; name: string }
+  | { type: "UPDATE_LEVEL"; floorId: string; name: string; unconditioned: boolean }
+  | { type: "DUPLICATE_LEVEL_RECTANGLES"; floorId: string; floorName: string; unconditioned: boolean }
   | { type: "UPSERT_ENTITY"; entity: MapEntity }
   | { type: "REMOVE_ENTITY"; entityId: string }
   | { type: "MOVE_ENTITY"; entityId: string; x: number; y: number }

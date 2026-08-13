@@ -7,6 +7,7 @@ export interface RectangleModalSubmit {
   widthFt: number;
   heightFt: number;
   color: string;
+  unconditioned: boolean;
   ceilingType: CeilingType;
   standardHeightFt: number;
   lowHeightFt: number;
@@ -80,6 +81,7 @@ export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: Re
   const [color, setColor] = useState("WHITE");
   const [widthFt, setWidthFt] = useState(12);
   const [heightFt, setHeightFt] = useState(12);
+  const [unconditioned, setUnconditioned] = useState(false);
   const [ceilingType, setCeilingType] = useState<CeilingType>("standard");
   const [standardHeightFt, setStandardHeightFt] = useState(8);
   const [lowHeightFt, setLowHeightFt] = useState(8);
@@ -92,6 +94,7 @@ export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: Re
     setColor(initialValues.color.toUpperCase());
     setWidthFt(clampToPositiveInt(initialValues.widthFt));
     setHeightFt(clampToPositiveInt(initialValues.heightFt));
+    setUnconditioned(Boolean(initialValues.unconditioned));
     setCeilingType(initialValues.ceilingType);
     setStandardHeightFt(clampToPositiveInt(initialValues.standardHeightFt));
     setLowHeightFt(clampToPositiveInt(initialValues.lowHeightFt));
@@ -154,6 +157,19 @@ export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: Re
           <StepperField value={heightFt} onChange={setHeightFt} />
         </div>
 
+        <div className="modal-row">
+          <label>UNCONDITIONED:</label>
+          <label className="modal-checkbox" htmlFor="rectUnconditioned">
+            <input
+              id="rectUnconditioned"
+              type="checkbox"
+              checked={unconditioned}
+              onChange={(event) => setUnconditioned(event.target.checked)}
+            />
+            <span>Exclude from area and volume</span>
+          </label>
+        </div>
+
         <div className="modal-row ceiling-row">
           <label>CEILING TYPE:</label>
           <select value={ceilingType} onChange={(event) => setCeilingType(event.target.value as CeilingType)}>
@@ -194,6 +210,7 @@ export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: Re
                 color,
                 widthFt,
                 heightFt,
+                unconditioned,
                 ceilingType,
                 standardHeightFt,
                 highHeightFt,

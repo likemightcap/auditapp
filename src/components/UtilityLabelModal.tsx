@@ -1,23 +1,21 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 
-export interface TextModalSubmit {
+export interface UtilityLabelSubmit {
   text: string;
   color: string;
-  size: "small" | "medium" | "large";
 }
 
-export interface TextModalInitialValues extends TextModalSubmit {}
+export interface UtilityLabelInitialValues extends UtilityLabelSubmit {}
 
-interface TextModalProps {
+interface UtilityLabelModalProps {
   isOpen: boolean;
-  initialValues: TextModalInitialValues;
+  initialValues: UtilityLabelInitialValues;
   onCancel: () => void;
-  onSubmit: (payload: TextModalSubmit) => void;
+  onSubmit: (payload: UtilityLabelSubmit) => void;
 }
 
 const COLORS = ["WHITE", "BLUE", "RED", "YELLOW"] as const;
-const SIZES = ["small", "medium", "large"] as const;
 
 function colorCellStyles(color: string): CSSProperties {
   switch (color.toUpperCase()) {
@@ -33,10 +31,14 @@ function colorCellStyles(color: string): CSSProperties {
   }
 }
 
-export function TextModal({ isOpen, initialValues, onCancel, onSubmit }: TextModalProps) {
+export function UtilityLabelModal({
+  isOpen,
+  initialValues,
+  onCancel,
+  onSubmit,
+}: UtilityLabelModalProps) {
   const [text, setText] = useState("");
   const [color, setColor] = useState("WHITE");
-  const [size, setSize] = useState<"small" | "medium" | "large">("medium");
 
   useEffect(() => {
     if (!isOpen) {
@@ -44,7 +46,6 @@ export function TextModal({ isOpen, initialValues, onCancel, onSubmit }: TextMod
     }
     setText((initialValues.text ?? "").toUpperCase());
     setColor(initialValues.color.toUpperCase());
-    setSize((initialValues.size ?? "medium") as "small" | "medium" | "large");
   }, [initialValues, isOpen]);
 
   const canSubmit = useMemo(() => text.trim().length > 0, [text]);
@@ -56,7 +57,7 @@ export function TextModal({ isOpen, initialValues, onCancel, onSubmit }: TextMod
   return (
     <div className="modal-backdrop" onPointerDown={onCancel}>
       <section className="text-modal" onPointerDown={(event) => event.stopPropagation()}>
-        <h2>TEXT</h2>
+        <h2>UTILITY LABEL</h2>
 
         <div className="modal-row">
           <label>TEXT:</label>
@@ -65,7 +66,7 @@ export function TextModal({ isOpen, initialValues, onCancel, onSubmit }: TextMod
             type="text"
             value={text}
             onChange={(event) => setText(event.target.value.toUpperCase())}
-            placeholder="Type label"
+            placeholder="Name this utility"
           />
         </div>
 
@@ -80,23 +81,12 @@ export function TextModal({ isOpen, initialValues, onCancel, onSubmit }: TextMod
           </select>
         </div>
 
-        <div className="modal-row">
-          <label>SIZE:</label>
-          <select value={size} onChange={(event) => setSize(event.target.value as "small" | "medium" | "large")}>
-            {SIZES.map((item) => (
-              <option key={item} value={item}>
-                {item.toUpperCase()}
-              </option>
-            ))}
-          </select>
-        </div>
-
         <div className="modal-actions">
           <button
             type="button"
             className="okay"
             disabled={!canSubmit}
-            onClick={() => onSubmit({ text: text.trim().toUpperCase(), color, size })}
+            onClick={() => onSubmit({ text: text.trim().toUpperCase(), color })}
           >
             OKAY
           </button>

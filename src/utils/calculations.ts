@@ -115,6 +115,10 @@ function computeFloorMetrics(floor: FloorData, previewEntity: MapEntity | null =
   const cellCeilingHeights = new Map<string, number>();
 
   for (const rect of rectangles) {
+    if (Boolean(rect.metadata.unconditioned)) {
+      continue;
+    }
+
     const { x1, y1, x2, y2 } = rectBounds(rect);
     const averageHeightFt = ceilingAverageHeight(rect);
     const hasCeiling = (rect.metadata.ceilingType ?? "standard") !== "none";
@@ -158,22 +162,44 @@ function computeFloorMetrics(floor: FloorData, previewEntity: MapEntity | null =
 
 export function calculateProjectMetrics(project: Project, previewEntity: MapEntity | null = null): ProjectMetrics {
   const activeFloor = project.floors.find((floor) => floor.id === project.activeFloorId) ?? project.floors[0];
-  const active = computeFloorMetrics(activeFloor, previewEntity);
-  const conditionedAreaFt2 = active.wallLoopAreaFt2 > 0 ? active.wallLoopAreaFt2 : active.rectangleAreaFt2;
-  const hasRectangleFootprint = active.rectangleAreaFt2 > 0;
-  const hasRectangleMetrics = active.rectangleCeilingAreaFt2 > 0;
-  const averageCeilingHeightFt = hasRectangleMetrics
-    ? active.rectangleVolumeFt3 / active.rectangleCeilingAreaFt2
-    : hasRectangleFootprint
-      ? 0
-      : project.averageCeilingHeightFt;
-  const volumeFt3 = active.wallLoopAreaFt2 > 0
-    ? conditionedAreaFt2 * project.averageCeilingHeightFt
-    : hasRectangleMetrics
-      ? active.rectangleVolumeFt3
-      : hasRectangleFootprint
-        ? 0
-        : 0;
+  const emptyActive: FloorMetrics = {
+    wallLoopAreaFt2: 0,
+    rectangleAreaFt2: 0,
+    rectangleCeilingAreaFt2: 0,
+    rectangleVolumeFt3: 0,
+    rectangleWeightedHeightSum: 0,
+    wallLengthFt: 0,
+    totalEntities: 0,
+  };
+
+  const active = activeFloor ? computeFloorMetrics(activeFloor, previewEntity) : emptyActive;
+
+  let conditionedAreaFt2 = 0;
+  let conditionedVolumeFt3 = 0;
+
+  for (const floor of project.floors) {
+    if (Boolean(floor.unconditioned)) {
+      continue;
+    }
+
+    const metrics = computeFloorMetrics(floor);
+    const floorAreaFt2 = metrics.wallLoopAreaFt2 > 0 ? metrics.wallLoopAreaFt2 : metrics.rectangleAreaFt2;
+    conditionedAreaFt2 += floorAreaFt2;
+
+    const hasRectangleFootprint = metrics.rectangleAreaFt2 > 0;
+    const hasRectangleMetrics = metrics.rectangleCeilingAreaFt2 > 0;
+    const floorVolumeFt3 = metrics.wallLoopAreaFt2 > 0
+      ? floorAreaFt2 * project.averageCeilingHeightFt
+      : hasRectangleMetrics
+        ? metrics.rectangleVolumeFt3
+        : hasRectangleFootprint
+          ? 0
+          : 0;
+    conditionedVolumeFt3 += floorVolumeFt3;
+  }
+
+  const averageCeilingHeightFt = conditionedAreaFt2 > 0 ? conditionedVolumeFt3 / conditionedAreaFt2 : 0;
+  const volumeFt3 = conditionedVolumeFt3;
 
   return {
     conditionedAreaFt2,

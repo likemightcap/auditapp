@@ -1,10 +1,15 @@
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { calculateProjectMetrics } from "../utils/calculations";
 import { useEditor } from "../state/EditorContext";
+import { createEntityFromTool } from "../state/editorReducer";
 import { TOOL_DEFINITIONS } from "../tools/toolDefinitions";
 import { getUtilityIconByToolId, isUtilityToolId } from "../assets/utilityIcons";
 import { WindowModal } from "./WindowModal";
 import type { WindowModalSubmit } from "./WindowModal";
+import { UtilityLabelModal } from "./UtilityLabelModal";
+import type { UtilityLabelInitialValues, UtilityLabelSubmit } from "./UtilityLabelModal";
+import { screenToWorld, snapPointToGrid } from "../utils/geometry";
 import {
   exportProjectAsJson,
   importProjectFromJson,
@@ -19,6 +24,18 @@ function clampPositiveInt(value: number, fallback: number): number {
     return fallback;
   }
   return Math.max(1, Math.round(normalized));
+}
+
+interface UtilityDragState {
+  toolId: ToolId;
+  pointerId: number;
+  x: number;
+  y: number;
+}
+
+interface UtilityLabelModalState {
+  entityId: string;
+  initialValues: UtilityLabelInitialValues;
 }
 
 function ToolIcon({ toolId, fallback }: { toolId: ToolId; fallback: string }) {
@@ -50,11 +67,11 @@ function ToolIcon({ toolId, fallback }: { toolId: ToolId; fallback: string }) {
 
   if (toolId === "door") {
     return (
-      <svg className="tool-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M3 21 A10 10 0 0 1 13 11 L13 21 Z" fill="#a6a24a" />
-        <path d="M3 21 A10 10 0 0 1 13 11" fill="none" stroke="#ffffff" strokeWidth="2.8" strokeLinecap="square" />
-        <line x1="13" y1="11" x2="13" y2="21" stroke="#ffffff" strokeWidth="2.8" strokeLinecap="square" />
-        <line x1="3" y1="21" x2="13" y2="21" stroke="#ffffff" strokeWidth="2.8" strokeLinecap="square" />
+      <svg className="tool-icon-svg tool-icon-door" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M8 18 A8 8 0 0 1 16 10 L16 18 Z" fill="#a6a24a" />
+        <path d="M8 18 A8 8 0 0 1 16 10" fill="none" stroke="#ffffff" strokeWidth="2.6" strokeLinecap="square" />
+        <line x1="16" y1="10" x2="16" y2="18" stroke="#ffffff" strokeWidth="2.6" strokeLinecap="square" />
+        <line x1="8" y1="18" x2="16" y2="18" stroke="#ffffff" strokeWidth="2.6" strokeLinecap="square" />
       </svg>
     );
   }
@@ -88,10 +105,12 @@ function ToolGroup({
   title,
   ids,
   onWindowToolConfigRequest,
+  onToolPressed,
 }: {
   title: string;
   ids: ToolId[];
   onWindowToolConfigRequest?: () => void;
+  onToolPressed?: (toolId: ToolId) => void;
 }) {
   const { state, dispatch } = useEditor();
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -120,11 +139,16 @@ function ToolGroup({
             key={tool.id}
             type="button"
             className={`tool-btn ${state.activeTool === tool.id ? "active" : ""}`}
+            draggable={false}
             onClick={() => {
+              if (isUtilityToolId(tool.id)) {
+                return;
+              }
               if (tool.id === "window" && longPressFiredRef.current) {
                 longPressFiredRef.current = false;
                 return;
               }
+              onToolPressed?.(tool.id);
               dispatch({ type: "SET_TOOL", tool: tool.id });
             }}
             onContextMenu={(event) => {
@@ -132,6 +156,7 @@ function ToolGroup({
                 return;
               }
               event.preventDefault();
+              onToolPressed?.("window");
               dispatch({ type: "SET_TOOL", tool: "window" });
               onWindowToolConfigRequest?.();
             }}
@@ -145,6 +170,7 @@ function ToolGroup({
               longPressStartRef.current = { x: event.clientX, y: event.clientY };
               longPressTimerRef.current = setTimeout(() => {
                 longPressFiredRef.current = true;
+                onToolPressed?.("window");
                 dispatch({ type: "SET_TOOL", tool: "window" });
                 onWindowToolConfigRequest?.();
                 clearWindowToolLongPress();
@@ -188,23 +214,221 @@ function ToolGroup({
   );
 }
 
+function UtilityStickerGroup({
+  ids,
+  onStartDrag,
+}: {
+  ids: ToolId[];
+  onStartDrag: (toolId: ToolId, event: React.PointerEvent<HTMLButtonElement>) => void;
+}) {
+  const orderedTools = ids
+    .map((id) => TOOL_DEFINITIONS.find((tool) => tool.id === id))
+    .filter((tool): tool is NonNullable<typeof tool> => Boolean(tool));
+
+  return (
+    <div className="tool-group">
+      <h3>UTILITIES</h3>
+      <div className="tool-grid">
+        {orderedTools.map((tool) => (
+          <button
+            key={tool.id}
+            type="button"
+            className="tool-btn"
+            draggable={false}
+            onClick={(event) => {
+              event.preventDefault();
+            }}
+            onPointerDown={(event) => {
+              onStartDrag(tool.id, event);
+            }}
+          >
+            <ToolIcon toolId={tool.id} fallback={tool.icon} />
+            <span className="label">{tool.label}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function LeftToolbar() {
   const { state, dispatch } = useEditor();
   const metrics = calculateProjectMetrics(state.project, state.previewEntity);
   const [windowToolModalOpen, setWindowToolModalOpen] = useState(false);
+  const [utilityDrag, setUtilityDrag] = useState<UtilityDragState | null>(null);
+  const [utilityLabelModalState, setUtilityLabelModalState] = useState<UtilityLabelModalState | null>(null);
 
   const windowDefaultWidthFt = clampPositiveInt(Number(state.project.metadata.windowDefaultWidthFt ?? 3), 3);
   const windowDefaultHeightFt = clampPositiveInt(Number(state.project.metadata.windowDefaultHeightFt ?? 4), 4);
 
+  const selectedEntityType = useMemo(() => {
+    const selection = state.selection;
+    if (selection.kind !== "entity") {
+      return null;
+    }
+    const floor = state.project.floors.find((item) => item.id === state.project.activeFloorId) ?? state.project.floors[0];
+    if (!floor) {
+      return null;
+    }
+    const selected = floor.entities.find((entity) => entity.id === selection.id);
+    return selected?.type ?? null;
+  }, [state.project.activeFloorId, state.project.floors, state.selection]);
+
+  const maybeClearSelectionForTool = (toolId: ToolId) => {
+    if (state.selection.kind !== "entity") {
+      return;
+    }
+    if (toolId === "select" || selectedEntityType === toolId) {
+      return;
+    }
+    dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
+  };
+
+  useEffect(() => {
+    if (!utilityDrag) {
+      return;
+    }
+
+    const onPointerMove = (event: PointerEvent) => {
+      setUtilityDrag((current) =>
+        current
+          ? {
+              ...current,
+              x: event.clientX,
+              y: event.clientY,
+            }
+          : null,
+      );
+    };
+
+    const onPointerUp = (event: PointerEvent) => {
+      setUtilityDrag((current) => {
+        if (!current) {
+          return null;
+        }
+
+        const workspace = document.querySelector("svg.workspace") as SVGSVGElement | null;
+        if (workspace) {
+          const rect = workspace.getBoundingClientRect();
+          const insideWorkspace =
+            event.clientX >= rect.left &&
+            event.clientX <= rect.right &&
+            event.clientY >= rect.top &&
+            event.clientY <= rect.bottom;
+
+          if (insideWorkspace) {
+            const world = snapPointToGrid(
+              screenToWorld(
+                {
+                  x: event.clientX - rect.left,
+                  y: event.clientY - rect.top,
+                },
+                state.camera,
+              ),
+            );
+            const sticker = createEntityFromTool(current.toolId as any, world.x, world.y);
+            dispatch({ type: "UPSERT_ENTITY", entity: sticker });
+            dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: sticker.id } });
+            dispatch({ type: "SET_TOOL", tool: "select" });
+
+            if (sticker.type === "other") {
+              setUtilityLabelModalState({
+                entityId: sticker.id,
+                initialValues: {
+                  text: "",
+                  color: "WHITE",
+                },
+              });
+            }
+          }
+        }
+        return null;
+      });
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, [dispatch, state.camera, utilityDrag]);
+
+  const startUtilityDrag = (toolId: ToolId, event: React.PointerEvent<HTMLButtonElement>) => {
+    if (!isUtilityToolId(toolId)) {
+      return;
+    }
+    maybeClearSelectionForTool(toolId);
+    setUtilityDrag({
+      toolId,
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+    });
+  };
+
+  const utilityGhost =
+    utilityDrag && isUtilityToolId(utilityDrag.toolId) ? (
+      <div className="utility-drag-ghost" style={{ left: utilityDrag.x, top: utilityDrag.y }}>
+        <img src={getUtilityIconByToolId(utilityDrag.toolId)} alt="" aria-hidden="true" />
+      </div>
+    ) : null;
+
+  const utilityLabelModal = (
+    <UtilityLabelModal
+      isOpen={utilityLabelModalState !== null}
+      initialValues={utilityLabelModalState?.initialValues ?? { text: "", color: "WHITE" }}
+      onCancel={() => setUtilityLabelModalState(null)}
+      onSubmit={(payload: UtilityLabelSubmit) => {
+        if (!utilityLabelModalState) {
+          return;
+        }
+
+        const floor =
+          state.project.floors.find((item) => item.id === state.project.activeFloorId) ??
+          state.project.floors[0];
+          if (!floor) {
+            setUtilityLabelModalState(null);
+            return;
+          }
+        const existing = floor.entities.find((entity) => entity.id === utilityLabelModalState.entityId);
+        if (!existing || existing.type !== "other") {
+          setUtilityLabelModalState(null);
+          return;
+        }
+
+        dispatch({
+          type: "UPSERT_ENTITY",
+          entity: {
+            ...existing,
+            label: payload.text.toUpperCase(),
+            metadata: {
+              ...existing.metadata,
+              color: payload.color,
+            },
+          },
+        });
+        dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: existing.id } });
+        setUtilityLabelModalState(null);
+      }}
+    />
+  );
+
   return (
     <aside className="left-toolbar">
-      <ToolGroup title="TOOLS" ids={["select", "rectangle", "text"]} />
+      <ToolGroup title="TOOLS" ids={["select", "rectangle", "text"]} onToolPressed={maybeClearSelectionForTool} />
       <ToolGroup
         title="BUILDING"
         ids={["door", "window", "skylight"]}
         onWindowToolConfigRequest={() => setWindowToolModalOpen(true)}
+        onToolPressed={maybeClearSelectionForTool}
       />
-      <ToolGroup title="UTILITIES" ids={["condenser", "heater", "dhw", "gas", "electric", "other"]} />
+      <UtilityStickerGroup
+        ids={["condenser", "heater", "dhw", "gas", "electric", "other"]}
+        onStartDrag={startUtilityDrag}
+      />
 
       <section className="details-panel">
         <h3>DETAILS</h3>
@@ -220,35 +444,10 @@ export function LeftToolbar() {
           <span>Total Volume</span>
           <strong>{metrics.volumeFt3.toFixed(0)}</strong>
         </div>
-        <div className="stats-row">
-          <span>Walls (ft)</span>
-          <strong>{metrics.activeFloor.wallLengthFt.toFixed(1)}</strong>
-        </div>
-        <div className="stats-row">
-          <span>Objects</span>
-          <strong>{metrics.activeFloor.totalEntities}</strong>
-        </div>
-
-        <div className="field-row">
-          <label htmlFor="projectName">Project</label>
-          <input
-            id="projectName"
-            value={state.project.projectName}
-            onChange={(event) => dispatch({ type: "SET_PROJECT_NAME", projectName: event.target.value })}
-          />
-        </div>
-        <div className="field-row">
-          <label htmlFor="address">Address</label>
-          <input
-            id="address"
-            value={state.project.address}
-            onChange={(event) => dispatch({ type: "SET_ADDRESS", address: event.target.value })}
-          />
-        </div>
       </section>
 
       <section className="dev-controls">
-        <h3>DEV STATE</h3>
+        <h3>SAVE/LOAD</h3>
         <div className="dev-btns">
           <button type="button" onClick={() => saveProjectToLocalStorage(state.project)}>
             Save
@@ -291,9 +490,6 @@ export function LeftToolbar() {
           >
             Import JSON
           </button>
-          <button type="button" onClick={() => dispatch({ type: "RESET_PROJECT" })}>
-            Reset
-          </button>
         </div>
       </section>
 
@@ -315,6 +511,10 @@ export function LeftToolbar() {
           setWindowToolModalOpen(false);
         }}
       />
+
+      {typeof document !== "undefined" ? createPortal(utilityLabelModal, document.body) : utilityLabelModal}
+
+      {utilityGhost && typeof document !== "undefined" ? createPortal(utilityGhost, document.body) : null}
     </aside>
   );
 }

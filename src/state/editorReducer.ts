@@ -26,15 +26,14 @@ function createInitialFloor(name = "1st Floor"): FloorData {
 }
 
 export function createInitialProject(): Project {
-  const firstFloor = createInitialFloor();
   return {
     projectId: uid("project"),
     projectName: "New Assessment",
     address: "",
     orientation: "S",
     averageCeilingHeightFt: 9,
-    floors: [firstFloor],
-    activeFloorId: firstFloor.id,
+    floors: [],
+    activeFloorId: "",
     metadata: {
       windowDefaultWidthFt: 3,
       windowDefaultHeightFt: 4,
@@ -65,17 +64,23 @@ function withHistory(state: EditorState, nextProject: Project): EditorState {
 }
 
 function updateActiveFloor(project: Project, updater: (floor: FloorData) => FloorData): Project {
+  if (!project.floors.some((floor) => floor.id === project.activeFloorId)) {
+    return project;
+  }
   return {
     ...project,
     floors: project.floors.map((floor) => (floor.id === project.activeFloorId ? updater(floor) : floor)),
   };
 }
 
-function getActiveFloor(project: Project): FloorData {
+function getActiveFloor(project: Project): FloorData | undefined {
   return project.floors.find((floor) => floor.id === project.activeFloorId) ?? project.floors[0];
 }
 
-function cleanSelection(selection: Selection, floor: FloorData): Selection {
+function cleanSelection(selection: Selection, floor?: FloorData): Selection {
+  if (!floor) {
+    return { kind: "none" };
+  }
   if (selection.kind === "entity" && !floor.entities.some((entity) => entity.id === selection.id)) {
     return { kind: "none" };
   }
@@ -109,6 +114,16 @@ function upsertEntity(list: MapEntity[], next: MapEntity): MapEntity[] {
   const clone = [...list];
   clone[index] = next;
   return clone;
+}
+
+function cloneRectanglesForDuplicate(sourceFloor: FloorData): MapEntity[] {
+  return sourceFloor.entities
+    .filter((entity) => entity.type === "rectangle")
+    .map((entity) => ({
+      ...entity,
+      id: uid("ent"),
+      metadata: { ...entity.metadata },
+    }));
 }
 
 function normalizeEntityForGrid(entity: MapEntity): MapEntity {
@@ -238,7 +253,12 @@ function setOrientation(project: Project, orientation: Orientation): Project {
 export function editorReducer(state: EditorState, action: EditorAction): EditorState {
   switch (action.type) {
     case "SET_TOOL":
-      return { ...state, activeTool: action.tool, wallDraftPointId: action.tool === "wall" ? state.wallDraftPointId : null };
+      return {
+        ...state,
+        activeTool: action.tool,
+        selection: action.tool === "select" ? state.selection : { kind: "none" },
+        wallDraftPointId: action.tool === "wall" ? state.wallDraftPointId : null,
+      };
     case "SET_SELECTION":
       return { ...state, selection: action.selection };
     case "SET_CAMERA":
@@ -282,11 +302,35 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       return withHistory(state, { ...state.project, averageCeilingHeightFt: action.value });
     case "ADD_LEVEL": {
       const nextFloor = createInitialFloor(action.floorName);
+      nextFloor.unconditioned = action.unconditioned;
       return withHistory(state, {
         ...state.project,
         floors: [...state.project.floors, nextFloor],
         activeFloorId: nextFloor.id,
       });
+    }
+    case "DELETE_LEVEL": {
+      const exists = state.project.floors.some((floor) => floor.id === action.floorId);
+      if (!exists) {
+        return state;
+      }
+
+      const nextFloors = state.project.floors.filter((floor) => floor.id !== action.floorId);
+      const nextActiveFloorId =
+        state.project.activeFloorId === action.floorId
+          ? nextFloors[0]?.id ?? ""
+          : state.project.activeFloorId;
+
+      return {
+        ...withHistory(state, {
+          ...state.project,
+          floors: nextFloors,
+          activeFloorId: nextActiveFloorId,
+        }),
+        selection: { kind: "none" },
+        wallDraftPointId: null,
+        previewEntity: null,
+      };
     }
     case "SET_ACTIVE_FLOOR": {
       const floor = state.project.floors.find((item) => item.id === action.floorId);
@@ -300,13 +344,31 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         wallDraftPointId: null,
       };
     }
-    case "RENAME_LEVEL":
+    case "UPDATE_LEVEL":
       return withHistory(state, {
         ...state.project,
         floors: state.project.floors.map((floor) =>
-          floor.id === action.floorId ? { ...floor, name: action.name } : floor,
+          floor.id === action.floorId
+            ? { ...floor, name: action.name, unconditioned: action.unconditioned }
+            : floor,
         ),
       });
+    case "DUPLICATE_LEVEL_RECTANGLES": {
+      const source = state.project.floors.find((floor) => floor.id === action.floorId);
+      if (!source) {
+        return state;
+      }
+
+      const nextFloor = createInitialFloor(action.floorName);
+      nextFloor.unconditioned = action.unconditioned;
+      nextFloor.entities = cloneRectanglesForDuplicate(source);
+
+      return withHistory(state, {
+        ...state.project,
+        floors: [...state.project.floors, nextFloor],
+        activeFloorId: nextFloor.id,
+      });
+    }
     case "UPSERT_ENTITY": {
       const normalized = normalizeEntityForGrid(action.entity);
       const nextProject = updateActiveFloor(state.project, (floor) => ({
@@ -323,11 +385,30 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       return withHistory(state, nextProject);
     }
     case "MOVE_ENTITY": {
+      const activeFloor = getActiveFloor(state.project);
+      if (!activeFloor) {
+        return state;
+      }
+      const existing = activeFloor.entities.find((entity) => entity.id === action.entityId);
+      if (!existing) {
+        return state;
+      }
+
+      const normalizedTarget = normalizeEntityForGrid({
+        ...existing,
+        x: action.x,
+        y: action.y,
+      });
+
+      if (existing.x === normalizedTarget.x && existing.y === normalizedTarget.y) {
+        return state;
+      }
+
       const nextProject = updateActiveFloor(state.project, (floor) => ({
         ...floor,
         entities: floor.entities.map((entity) =>
           entity.id === action.entityId
-            ? normalizeEntityForGrid({ ...entity, x: action.x, y: action.y })
+            ? normalizedTarget
             : entity,
         ),
       }));

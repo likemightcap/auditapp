@@ -8,6 +8,8 @@ import { DoorModal } from "./DoorModal";
 import type { DoorModalSubmit } from "./DoorModal";
 import { WindowModal } from "./WindowModal";
 import type { WindowModalSubmit } from "./WindowModal";
+import { UtilityLabelModal } from "./UtilityLabelModal";
+import type { UtilityLabelSubmit } from "./UtilityLabelModal";
 import { useEditor } from "../state/EditorContext";
 import { createEntityFromTool, createWallPoint, createWallSegment } from "../state/editorReducer";
 import { getToolDefinition } from "../tools/toolDefinitions";
@@ -46,6 +48,7 @@ interface InteractionState {
   pointSnapshot?: WallPoint;
   resizeHandle?: ResizeHandle;
   dragStarted?: boolean;
+  latestWorld?: Point;
 }
 
 interface PinchGestureState {
@@ -55,8 +58,16 @@ interface PinchGestureState {
   anchorWorld: Point;
 }
 
+const EMPTY_FLOOR = {
+  id: "",
+  name: "",
+  entities: [],
+  wallPoints: [],
+  wallSegments: [],
+};
+
 function getFloor(state: ReturnType<typeof useEditor>["state"]) {
-  return state.project.floors.find((floor) => floor.id === state.project.activeFloorId) ?? state.project.floors[0];
+  return state.project.floors.find((floor) => floor.id === state.project.activeFloorId) ?? state.project.floors[0] ?? EMPTY_FLOOR;
 }
 
 function fmtFeet(value: number): string {
@@ -68,6 +79,7 @@ const WINDOW_SELECTION_PADDING = 0.12;
 const WINDOW_ANCHOR_WIDTH = 0.22;
 const WINDOW_ANCHOR_HEIGHT = 0.46;
 const WINDOW_LABEL_OFFSET = 1.02;
+const LINEAR_MARKER_COLOR = "#96677a";
 
 function getRectangleFillColor(color: string): string {
   switch (color.toLowerCase()) {
@@ -100,15 +112,21 @@ function RectangleCeilingOverlay({ entity }: { entity: MapEntity }) {
   const xCenter = entity.width / 2;
   const yCenter = entity.height / 2;
   const inset = 1.2;
+  const heightLabelY = Math.max(0.8, yCenter - 1.8);
   const isCathedralVertical = ceilingType === "cathedral";
   const isCathedralHorizontal = ceilingType === "cathedral-horizontal";
   const isSlopedHorizontal = ceilingType === "sloped-horizontal";
 
   if (ceilingType === "standard") {
     return (
-      <text x={xCenter} y={yCenter} textAnchor="middle" className="ceiling-label">
-        {fmtFeet(standardHeight)}
-      </text>
+      <g className="ceiling-overlay" pointerEvents="none">
+        <text x={xCenter} y={heightLabelY} textAnchor="middle" className="ceiling-caption">
+          HEIGHT
+        </text>
+        <text x={xCenter} y={yCenter} textAnchor="middle" className="ceiling-label">
+          {fmtFeet(standardHeight)}
+        </text>
+      </g>
     );
   }
 
@@ -123,19 +141,19 @@ function RectangleCeilingOverlay({ entity }: { entity: MapEntity }) {
     if (isCathedralHorizontal) {
       return (
         <g className="ceiling-overlay" pointerEvents="none">
-          <line x1={xCenter} y1={0} x2={xCenter} y2={yCenter - 1.8} stroke="#ffffff" strokeWidth={0.2} />
-          <line x1={xCenter} y1={yCenter + 1.8} x2={xCenter} y2={entity.height} stroke="#ffffff" strokeWidth={0.2} />
+          <line x1={xCenter} y1={0} x2={xCenter} y2={yCenter - 1.8} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.2} />
+          <line x1={xCenter} y1={yCenter + 1.8} x2={xCenter} y2={entity.height} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.2} />
 
-          <line x1={inset} y1={yCenter} x2={leftArrowX - arrowSize} y2={yCenter} stroke="#ffffff" strokeWidth={0.18} />
-          <line x1={entity.width - inset} y1={yCenter} x2={rightArrowX + arrowSize} y2={yCenter} stroke="#ffffff" strokeWidth={0.18} />
+          <line x1={inset} y1={yCenter} x2={leftArrowX - arrowSize} y2={yCenter} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
+          <line x1={entity.width - inset} y1={yCenter} x2={rightArrowX + arrowSize} y2={yCenter} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
 
           <polygon
             points={`${leftArrowX - arrowSize},${yCenter - arrowSize} ${leftArrowX - arrowSize},${yCenter + arrowSize} ${leftArrowX},${yCenter}`}
-            fill="#ffffff"
+            fill={LINEAR_MARKER_COLOR}
           />
           <polygon
             points={`${rightArrowX + arrowSize},${yCenter - arrowSize} ${rightArrowX + arrowSize},${yCenter + arrowSize} ${rightArrowX},${yCenter}`}
-            fill="#ffffff"
+            fill={LINEAR_MARKER_COLOR}
           />
 
           <text x={(inset + leftArrowX) / 2 - 0.1} y={yCenter - 0.65} textAnchor="middle" className="ceiling-label">
@@ -161,19 +179,19 @@ function RectangleCeilingOverlay({ entity }: { entity: MapEntity }) {
 
     return (
       <g className="ceiling-overlay" pointerEvents="none">
-        <line x1={0} y1={yCenter} x2={xCenter - 1.8} y2={yCenter} stroke="#ffffff" strokeWidth={0.2} />
-        <line x1={xCenter + 1.8} y1={yCenter} x2={entity.width} y2={yCenter} stroke="#ffffff" strokeWidth={0.2} />
+        <line x1={0} y1={yCenter} x2={xCenter - 1.8} y2={yCenter} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.2} />
+        <line x1={xCenter + 1.8} y1={yCenter} x2={entity.width} y2={yCenter} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.2} />
 
-        <line x1={xCenter} y1={inset} x2={xCenter} y2={topArrowY - arrowSize} stroke="#ffffff" strokeWidth={0.18} />
-        <line x1={xCenter} y1={entity.height - inset} x2={xCenter} y2={bottomArrowY + arrowSize} stroke="#ffffff" strokeWidth={0.18} />
+        <line x1={xCenter} y1={inset} x2={xCenter} y2={topArrowY - arrowSize} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
+        <line x1={xCenter} y1={entity.height - inset} x2={xCenter} y2={bottomArrowY + arrowSize} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
 
         <polygon
           points={`${xCenter - arrowSize},${topArrowY - arrowSize} ${xCenter + arrowSize},${topArrowY - arrowSize} ${xCenter},${topArrowY}`}
-          fill="#ffffff"
+          fill={LINEAR_MARKER_COLOR}
         />
         <polygon
           points={`${xCenter - arrowSize},${bottomArrowY + arrowSize} ${xCenter + arrowSize},${bottomArrowY + arrowSize} ${xCenter},${bottomArrowY}`}
-          fill="#ffffff"
+          fill={LINEAR_MARKER_COLOR}
         />
 
         <text x={xCenter + 1.05} y={(inset + topArrowY) / 2 + 0.2} textAnchor="start" className="ceiling-label">
@@ -198,36 +216,61 @@ function RectangleCeilingOverlay({ entity }: { entity: MapEntity }) {
   }
 
   if (isSlopedHorizontal) {
+    const arrowSize = 0.5;
+    const lineStartX = inset + 0.8;
+    const lineEndX = entity.width - inset;
     return (
       <g className="ceiling-overlay" pointerEvents="none">
-        <line x1={inset} y1={yCenter} x2={entity.width - inset} y2={yCenter} stroke="#ffffff" strokeWidth={0.18} />
-        <polygon points={`${entity.width - inset - 0.8},${yCenter - 0.5} ${entity.width - inset - 0.8},${yCenter + 0.5} ${entity.width - inset},${yCenter}`} fill="#ffffff" />
+        <line x1={lineStartX} y1={yCenter} x2={lineEndX} y2={yCenter} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
         <polygon
-          points={`${inset + 0.8},${yCenter - 0.5} ${inset + 0.8},${yCenter + 0.5} ${inset},${yCenter}`}
-          fill="#ffffff"
+          points={`${lineStartX},${yCenter - arrowSize} ${lineStartX},${yCenter + arrowSize} ${inset},${yCenter}`}
+          fill={LINEAR_MARKER_COLOR}
         />
-        <text x={entity.width - inset - 1.35} y={yCenter - 0.65} textAnchor="middle" className="ceiling-caption">
-          SLOPED {fmtFeet(highHeight)}
+        <text x={lineStartX + 0.55} y={yCenter + 0.88} textAnchor="start" className="ceiling-value cathedral-value">
+          {fmtFeet(highHeight)}
         </text>
-        <text x={inset + 1.35} y={yCenter + 1.25} textAnchor="start" className="ceiling-label">
+        <text x={xCenter} y={yCenter + 0.88} textAnchor="middle" className="ceiling-caption cathedral-caption">
+          SLOPED
+        </text>
+        <text x={lineEndX - 0.05} y={yCenter + 0.88} textAnchor="end" className="ceiling-value cathedral-value">
           {fmtFeet(lowHeight)}
         </text>
       </g>
     );
   }
 
+  const arrowSize = 0.5;
+  const lineTopY = inset;
+  const lineBottomY = entity.height - inset - 0.8;
   return (
     <g className="ceiling-overlay" pointerEvents="none">
-      <line x1={xCenter} y1={entity.height - inset} x2={xCenter} y2={inset} stroke="#ffffff" strokeWidth={0.18} />
-      <polygon points={`${xCenter - 0.5},${inset + 0.8} ${xCenter + 0.5},${inset + 0.8} ${xCenter},${inset}`} fill="#ffffff" />
-      <polygon
-        points={`${xCenter - 0.5},${entity.height - inset - 0.8} ${xCenter + 0.5},${entity.height - inset - 0.8} ${xCenter},${entity.height - inset}`}
-        fill="#ffffff"
-      />
-      <text x={xCenter} y={inset + 1.4} textAnchor="middle" className="ceiling-caption">
-        SLOPED {fmtFeet(highHeight)}
+      <line x1={xCenter} y1={lineBottomY} x2={xCenter} y2={lineTopY} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
+      <polygon points={`${xCenter - arrowSize},${lineTopY + 0.8} ${xCenter + arrowSize},${lineTopY + 0.8} ${xCenter},${lineTopY}`} fill={LINEAR_MARKER_COLOR} />
+      <text
+        x={xCenter - 0.62}
+        y={lineTopY + 0.85}
+        textAnchor="middle"
+        className="ceiling-value cathedral-value"
+        transform={`rotate(-90 ${xCenter - 0.62} ${lineTopY + 0.85})`}
+      >
+        {fmtFeet(highHeight)}
       </text>
-      <text x={xCenter + 0.95} y={entity.height - inset - 0.9} textAnchor="start" className="ceiling-label">
+      <text
+        x={xCenter - 0.62}
+        y={yCenter}
+        textAnchor="middle"
+        className="ceiling-caption cathedral-caption"
+        transform={`rotate(-90 ${xCenter - 0.62} ${yCenter})`}
+      >
+        SLOPED
+      </text>
+      <text
+        x={xCenter - 0.62}
+        y={lineBottomY - 0.1}
+        textAnchor="middle"
+        className="ceiling-value cathedral-value"
+        transform={`rotate(-90 ${xCenter - 0.62} ${lineBottomY - 0.1})`}
+      >
         {fmtFeet(lowHeight)}
       </text>
     </g>
@@ -278,7 +321,9 @@ interface RectangleModalState {
 }
 
 interface TextModalState {
+  mode: "create" | "edit";
   anchor: Point;
+  entityId?: string;
   initialValues: TextModalInitialValues;
 }
 
@@ -294,6 +339,12 @@ interface DoorModalState {
   initialMirrored: boolean;
 }
 
+interface UtilityLabelModalState {
+  entityId: string;
+  initialText: string;
+  initialColor: string;
+}
+
 interface LongPressState {
   timer: ReturnType<typeof setTimeout> | null;
   pointerId: number | null;
@@ -306,6 +357,7 @@ const DEFAULT_RECTANGLE_MODAL_VALUES: RectangleModalInitialValues = {
   widthFt: 12,
   heightFt: 12,
   color: "WHITE",
+  unconditioned: false,
   ceilingType: "standard",
   standardHeightFt: 8,
   lowHeightFt: 8,
@@ -315,29 +367,108 @@ const DEFAULT_RECTANGLE_MODAL_VALUES: RectangleModalInitialValues = {
 const DEFAULT_TEXT_MODAL_VALUES: TextModalInitialValues = {
   text: "",
   color: "WHITE",
+  size: "medium",
 };
 
 function getTextColor(color: string): string {
   switch (color.toLowerCase()) {
     case "blue":
-      return "#b8d8ff";
+      return "#1117ff";
     case "red":
-      return "#ffd1ce";
+      return "#e00000";
     case "yellow":
-      return "#fff1b4";
+      return "#ffed00";
     case "white":
     default:
       return "#ffffff";
   }
 }
 
+function getTextSize(entity: MapEntity): "small" | "medium" | "large" {
+  const size = String(entity.metadata.textSize ?? "medium").toLowerCase();
+  if (size === "small" || size === "large") {
+    return size;
+  }
+  return "medium";
+}
+
+function getTextScale(size: "small" | "medium" | "large"): number {
+  if (size === "small") {
+    return 0.82;
+  }
+  if (size === "large") {
+    return 1.28;
+  }
+  return 1;
+}
+
+let textMeasureContext: CanvasRenderingContext2D | null = null;
+
+function getTextMeasureContext(): CanvasRenderingContext2D | null {
+  if (textMeasureContext) {
+    return textMeasureContext;
+  }
+  if (typeof document === "undefined") {
+    return null;
+  }
+  const canvas = document.createElement("canvas");
+  textMeasureContext = canvas.getContext("2d");
+  return textMeasureContext;
+}
+
+function getTextBounds(label: string, size: "small" | "medium" | "large") {
+  const safeLabel = (label || "TEXT").toUpperCase();
+  const scale = getTextScale(size);
+  const fontSize = 0.95 * scale;
+  const letterSpacingPx = fontSize * 0.02;
+  const measure = getTextMeasureContext();
+
+  let textWidth = safeLabel.length * fontSize * 0.58;
+  let boxLeft = 0;
+  let boxRight = textWidth;
+  let ascent = fontSize * 0.78;
+  let descent = fontSize * 0.24;
+
+  if (measure) {
+    measure.font = `900 ${fontSize}px sans-serif`;
+    const metrics = measure.measureText(safeLabel);
+    textWidth = metrics.width;
+    boxLeft = -(metrics.actualBoundingBoxLeft || 0);
+    boxRight = metrics.actualBoundingBoxRight || textWidth;
+    ascent = metrics.actualBoundingBoxAscent || ascent;
+    descent = metrics.actualBoundingBoxDescent || descent;
+  }
+
+  textWidth += Math.max(0, safeLabel.length - 1) * letterSpacingPx;
+  boxRight += Math.max(0, safeLabel.length - 1) * letterSpacingPx;
+
+  const contentX = Math.min(boxLeft, 0);
+  const contentY = -ascent;
+  const contentWidth = Math.max(0.35, boxRight - contentX);
+  const contentHeight = Math.max(0.35, ascent + descent);
+  const pad = Math.max(0.04, fontSize * 0.08);
+
+  return {
+    safeLabel,
+    contentX,
+    contentY,
+    contentWidth,
+    contentHeight,
+    selectionX: contentX - pad,
+    selectionY: contentY - pad,
+    selectionWidth: contentWidth + pad * 2,
+    selectionHeight: contentHeight + pad * 2,
+    fontSize,
+  };
+}
+
 function PerimeterGuides({ guides }: { guides: GuideSegment[] }) {
-  const hOffset = 2.8;
-  const vOffset = 2.8;
+  const hOffset = 4.5;
+  const vOffset = 4.5;
   const staggerStep = 1.8;
   const minLabelSeparation = 2.4;
   const markerStrokeWidth = 0.21;
-  const markerColor = "#96677a";
+  const markerColor = LINEAR_MARKER_COLOR;
 
   type PositionedGuide = {
     segment: GuideSegment;
@@ -927,6 +1058,7 @@ export function Workspace() {
   const [textModalState, setTextModalState] = useState<TextModalState | null>(null);
   const [doorModalState, setDoorModalState] = useState<DoorModalState | null>(null);
   const [windowModalState, setWindowModalState] = useState<WindowModalState | null>(null);
+  const [utilityLabelModalState, setUtilityLabelModalState] = useState<UtilityLabelModalState | null>(null);
   const [viewportSize, setViewportSize] = useState<ViewportSize>({ width: 0, height: 0 });
   const touchPointsRef = useRef<Map<number, Point>>(new Map());
   const longPressRef = useRef<LongPressState>({
@@ -976,6 +1108,18 @@ export function Workspace() {
       return null;
     }
     return (candidate.metadata.edge as RectEdge | undefined) ?? "top";
+  }, [floor.entities, state.selection]);
+
+  const selectedSkylightEntity = useMemo(() => {
+    const selection = state.selection;
+    if (selection.kind !== "entity") {
+      return null;
+    }
+    const candidate = floor.entities.find((entity) => entity.id === selection.id);
+    if (!candidate || candidate.type !== "skylight") {
+      return null;
+    }
+    return candidate;
   }, [floor.entities, state.selection]);
 
   const rectangleGuideGroups = useMemo(() => {
@@ -1054,6 +1198,18 @@ export function Workspace() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const tagName = target?.tagName?.toLowerCase();
+      const isEditable =
+        Boolean(target?.isContentEditable) ||
+        tagName === "input" ||
+        tagName === "textarea" ||
+        tagName === "select";
+
+      if (isEditable) {
+        return;
+      }
+
       if (event.key === "Delete" || event.key === "Backspace") {
         event.preventDefault();
         dispatch({ type: "DELETE_SELECTION" });
@@ -1115,6 +1271,7 @@ export function Workspace() {
     widthFt: Math.max(1, Math.round(Math.abs(entity.width))),
     heightFt: Math.max(1, Math.round(Math.abs(entity.height))),
     color: String(entity.metadata.color ?? "WHITE").toUpperCase(),
+    unconditioned: Boolean(entity.metadata.unconditioned),
     ceilingType: (entity.metadata.ceilingType ?? "standard") as
       | "standard"
       | "cathedral"
@@ -1143,8 +1300,26 @@ export function Workspace() {
 
   const openCreateTextModal = (anchor: Point) => {
     setTextModalState({
+      mode: "create",
       anchor: { x: Math.round(anchor.x), y: Math.round(anchor.y) },
       initialValues: DEFAULT_TEXT_MODAL_VALUES,
+    });
+  };
+
+  const openEditTextModal = (entity: MapEntity) => {
+    if (entity.type !== "text") {
+      return;
+    }
+
+    setTextModalState({
+      mode: "edit",
+      anchor: { x: Math.round(entity.x), y: Math.round(entity.y) },
+      entityId: entity.id,
+      initialValues: {
+        text: (entity.label || "").toUpperCase(),
+        color: String(entity.metadata.color ?? "WHITE").toUpperCase(),
+        size: getTextSize(entity),
+      },
     });
   };
 
@@ -1167,6 +1342,17 @@ export function Workspace() {
       entityId: entity.id,
       initialHeightFt: Math.max(1, Math.round(Math.abs(entity.height))),
       initialMirrored: Boolean(entity.metadata.mirrored),
+    });
+  };
+
+  const openUtilityLabelModal = (entity: MapEntity) => {
+    if (!isUtilityEntityType(entity.type)) {
+      return;
+    }
+    setUtilityLabelModalState({
+      entityId: entity.id,
+      initialText: entity.label ?? "",
+      initialColor: String(entity.metadata.color ?? "WHITE").toUpperCase(),
     });
   };
 
@@ -1273,6 +1459,10 @@ export function Workspace() {
   };
 
   const handleBackgroundDown = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (event.pointerType === "touch" || event.pointerType === "pen") {
+      event.preventDefault();
+    }
+
     if (event.pointerType === "touch") {
       const point = getTouchScreenPoint(event);
       touchPointsRef.current.set(event.pointerId, point);
@@ -1401,6 +1591,10 @@ export function Workspace() {
       return;
     }
 
+    if (isUtilityEntityType(tool.entityType)) {
+      return;
+    }
+
     const entity = createEntityFromTool(tool.entityType, world.x, world.y);
 
     dispatch({ type: "UPSERT_ENTITY", entity });
@@ -1408,10 +1602,14 @@ export function Workspace() {
   };
 
   const handlePointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (event.pointerType === "touch" || event.pointerType === "pen") {
+      event.preventDefault();
+    }
+
     if (longPressRef.current.pointerId === event.pointerId) {
       const dx = event.clientX - longPressRef.current.startScreen.x;
       const dy = event.clientY - longPressRef.current.startScreen.y;
-      if (Math.hypot(dx, dy) > 8) {
+      if (Math.hypot(dx, dy) > 14) {
         clearLongPress();
       }
     }
@@ -1437,6 +1635,8 @@ export function Workspace() {
     }
 
     if (interaction.type === "drag-entity" && interaction.targetId && interaction.entitySnapshot) {
+      interaction.latestWorld = world;
+
       if (interaction.tapAction === "flip-door" && interaction.entitySnapshot.type === "door") {
         const movedX = event.clientX - interaction.startScreen.x;
         const movedY = event.clientY - interaction.startScreen.y;
@@ -1460,7 +1660,14 @@ export function Workspace() {
           interaction.entitySnapshot,
           rectangleEntities,
         );
-        dispatch({ type: "MOVE_ENTITY", entityId: interaction.targetId, x: next.x, y: next.y });
+        dispatch({
+          type: "SET_PREVIEW_ENTITY",
+          entity: {
+            ...interaction.entitySnapshot,
+            x: next.x,
+            y: next.y,
+          },
+        });
         return;
       }
 
@@ -1473,7 +1680,14 @@ export function Workspace() {
           interaction.entitySnapshot,
           rectangleEntities,
         );
-        dispatch({ type: "MOVE_ENTITY", entityId: interaction.targetId, x: next.x, y: next.y });
+        dispatch({
+          type: "SET_PREVIEW_ENTITY",
+          entity: {
+            ...interaction.entitySnapshot,
+            x: next.x,
+            y: next.y,
+          },
+        });
         return;
       }
 
@@ -1482,10 +1696,12 @@ export function Workspace() {
         y: interaction.entitySnapshot.y + dy,
       });
       dispatch({
-        type: "MOVE_ENTITY",
-        entityId: interaction.targetId,
-        x: snapped.x,
-        y: snapped.y,
+        type: "SET_PREVIEW_ENTITY",
+        entity: {
+          ...interaction.entitySnapshot,
+          x: snapped.x,
+          y: snapped.y,
+        },
       });
       return;
     }
@@ -1497,15 +1713,32 @@ export function Workspace() {
     }
 
     if (interaction.type === "resize-rect" && interaction.targetId && interaction.entitySnapshot && interaction.resizeHandle) {
-      const sourceRect = rectBoundsFromEntity(interaction.entitySnapshot);
+      const sourceRect =
+        interaction.entitySnapshot.type === "skylight"
+          ? {
+              x: interaction.entitySnapshot.x - interaction.entitySnapshot.width / 2,
+              y: interaction.entitySnapshot.y - interaction.entitySnapshot.height / 2,
+              width: interaction.entitySnapshot.width,
+              height: interaction.entitySnapshot.height,
+            }
+          : rectBoundsFromEntity(interaction.entitySnapshot);
       const nextRect = applyRectResize(sourceRect, world, interaction.resizeHandle);
-      const updated: MapEntity = {
-        ...interaction.entitySnapshot,
-        x: nextRect.x,
-        y: nextRect.y,
-        width: nextRect.width,
-        height: nextRect.height,
-      };
+      const updated: MapEntity =
+        interaction.entitySnapshot.type === "skylight"
+          ? {
+              ...interaction.entitySnapshot,
+              x: nextRect.x + nextRect.width / 2,
+              y: nextRect.y + nextRect.height / 2,
+              width: nextRect.width,
+              height: nextRect.height,
+            }
+          : {
+              ...interaction.entitySnapshot,
+              x: nextRect.x,
+              y: nextRect.y,
+              width: nextRect.width,
+              height: nextRect.height,
+            };
       dispatch({ type: "UPSERT_ENTITY", entity: updated });
       dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: updated.id } });
       dispatch({ type: "SET_PREVIEW_ENTITY", entity: updated });
@@ -1624,6 +1857,10 @@ export function Workspace() {
   };
 
   const handlePointerUp = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (event.pointerType === "touch" || event.pointerType === "pen") {
+      event.preventDefault();
+    }
+
     if (longPressRef.current.pointerId === event.pointerId) {
       clearLongPress();
     }
@@ -1656,6 +1893,47 @@ export function Workspace() {
       };
       dispatch({ type: "UPSERT_ENTITY", entity: updated });
       dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: updated.id } });
+      dispatch({ type: "CLEAR_PREVIEW_ENTITY" });
+    } else if (interaction.type === "drag-entity" && interaction.targetId && interaction.entitySnapshot) {
+      const snapshot = interaction.entitySnapshot;
+      const referenceWorld = interaction.latestWorld ?? getEventWorld(event);
+      const dx = referenceWorld.x - interaction.startWorld.x;
+      const dy = referenceWorld.y - interaction.startWorld.y;
+
+      if (snapshot.type === "door") {
+        const next = lockWindowPointToHostEdge(
+          {
+            x: snapshot.x + dx,
+            y: snapshot.y + dy,
+          },
+          snapshot,
+          rectangleEntities,
+        );
+        dispatch({ type: "MOVE_ENTITY", entityId: interaction.targetId, x: next.x, y: next.y });
+      } else if (snapshot.type === "window") {
+        const next = lockWindowCenterToHostEdge(
+          {
+            x: snapshot.x + dx,
+            y: snapshot.y + dy,
+          },
+          snapshot,
+          rectangleEntities,
+        );
+        dispatch({ type: "MOVE_ENTITY", entityId: interaction.targetId, x: next.x, y: next.y });
+      } else {
+        const snapped = snapPointToGrid({
+          x: snapshot.x + dx,
+          y: snapshot.y + dy,
+        });
+        dispatch({
+          type: "MOVE_ENTITY",
+          entityId: interaction.targetId,
+          x: snapped.x,
+          y: snapped.y,
+        });
+      }
+
+      dispatch({ type: "CLEAR_PREVIEW_ENTITY" });
     }
 
     if (interaction.type === "draw-rect" && interaction.entitySnapshot) {
@@ -1701,7 +1979,11 @@ export function Workspace() {
       setDraftEntity(null);
     }
 
-    if (interaction.type === "resize-rect" || interaction.type === "resize-window" || interaction.type === "resize-skylight") {
+    if (
+      interaction.type === "resize-rect" ||
+      interaction.type === "resize-window" ||
+      interaction.type === "resize-skylight"
+    ) {
       dispatch({ type: "CLEAR_PREVIEW_ENTITY" });
     }
 
@@ -1728,6 +2010,61 @@ export function Workspace() {
 
   const handleEntityDown = (event: ReactPointerEvent<SVGGElement>, entity: MapEntity) => {
     event.stopPropagation();
+    if (event.pointerType === "touch" || event.pointerType === "pen") {
+      event.preventDefault();
+    }
+
+    if (isUtilityEntityType(entity.type) && event.button === 2) {
+      event.preventDefault();
+      dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: entity.id } });
+      openUtilityLabelModal(entity);
+      return;
+    }
+
+    if (
+      entity.type === "text" &&
+      event.button === 2 &&
+      state.selection.kind === "entity" &&
+      state.selection.id === entity.id
+    ) {
+      event.preventDefault();
+      openEditTextModal(entity);
+      return;
+    }
+
+    if (state.activeTool === "text") {
+      const world = getEventWorld(event);
+      if (entity.type === "text") {
+        dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: entity.id } });
+
+        if (event.pointerType === "touch") {
+          clearLongPress();
+          longPressRef.current.pointerId = event.pointerId;
+          longPressRef.current.entityId = entity.id;
+          longPressRef.current.startScreen = { x: event.clientX, y: event.clientY };
+          longPressRef.current.fired = false;
+          longPressRef.current.timer = setTimeout(() => {
+            longPressRef.current.fired = true;
+            finishInteraction();
+            openEditTextModal(entity);
+          }, 520);
+        }
+
+        interactionRef.current = {
+          type: "drag-entity",
+          pointerId: event.pointerId,
+          startScreen: { x: event.clientX, y: event.clientY },
+          startWorld: world,
+          targetId: entity.id,
+          entitySnapshot: entity,
+        };
+        svgRef.current?.setPointerCapture(event.pointerId);
+        return;
+      }
+
+      openCreateTextModal(world);
+      return;
+    }
 
     if (entity.type === "door" && event.button === 2) {
       event.preventDefault();
@@ -1744,6 +2081,25 @@ export function Workspace() {
     }
 
     if (state.activeTool === "rectangle") {
+      const isSelectedRectangle =
+        entity.type === "rectangle" &&
+        state.selection.kind === "entity" &&
+        state.selection.id === entity.id;
+
+      if (isSelectedRectangle) {
+        const world = getEventWorld(event);
+        interactionRef.current = {
+          type: "drag-entity",
+          pointerId: event.pointerId,
+          startScreen: { x: event.clientX, y: event.clientY },
+          startWorld: world,
+          targetId: entity.id,
+          entitySnapshot: entity,
+        };
+        svgRef.current?.setPointerCapture(event.pointerId);
+        return;
+      }
+
       if (entity.type === "rectangle" && event.button === 2) {
         event.preventDefault();
         openEditRectangleModal(entity);
@@ -1868,7 +2224,7 @@ export function Workspace() {
       if (entity.type === "skylight") {
         dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: entity.id } });
         interactionRef.current = {
-          type: "resize-skylight",
+          type: "drag-entity",
           pointerId: event.pointerId,
           startScreen: { x: event.clientX, y: event.clientY },
           startWorld: world,
@@ -1890,31 +2246,6 @@ export function Workspace() {
         dragStarted: false,
       };
       svgRef.current?.setPointerCapture(event.pointerId);
-      return;
-    }
-
-    const activeTool = getToolDefinition(state.activeTool);
-    const activeEntityType = activeTool?.entityType;
-    if (activeEntityType && isUtilityEntityType(activeEntityType)) {
-      const world = getEventWorld(event);
-
-      if (entity.type === activeEntityType) {
-        dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: entity.id } });
-        interactionRef.current = {
-          type: "drag-entity",
-          pointerId: event.pointerId,
-          startScreen: { x: event.clientX, y: event.clientY },
-          startWorld: world,
-          targetId: entity.id,
-          entitySnapshot: entity,
-        };
-        svgRef.current?.setPointerCapture(event.pointerId);
-        return;
-      }
-
-      const sticker = createEntityFromTool(activeEntityType, world.x, world.y);
-      dispatch({ type: "UPSERT_ENTITY", entity: sticker });
-      dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: sticker.id } });
       return;
     }
 
@@ -1967,6 +2298,37 @@ export function Workspace() {
       }, 520);
     }
 
+    if (isUtilityEntityType(entity.type) && event.pointerType === "touch") {
+      clearLongPress();
+      longPressRef.current.pointerId = event.pointerId;
+      longPressRef.current.entityId = entity.id;
+      longPressRef.current.startScreen = { x: event.clientX, y: event.clientY };
+      longPressRef.current.fired = false;
+      longPressRef.current.timer = setTimeout(() => {
+        longPressRef.current.fired = true;
+        finishInteraction();
+        openUtilityLabelModal(entity);
+      }, 520);
+    }
+
+    if (
+      entity.type === "text" &&
+      event.pointerType === "touch" &&
+      state.selection.kind === "entity" &&
+      state.selection.id === entity.id
+    ) {
+      clearLongPress();
+      longPressRef.current.pointerId = event.pointerId;
+      longPressRef.current.entityId = entity.id;
+      longPressRef.current.startScreen = { x: event.clientX, y: event.clientY };
+      longPressRef.current.fired = false;
+      longPressRef.current.timer = setTimeout(() => {
+        longPressRef.current.fired = true;
+        finishInteraction();
+        openEditTextModal(entity);
+      }, 520);
+    }
+
     if (state.activeTool !== "select") {
       return;
     }
@@ -1988,7 +2350,7 @@ export function Workspace() {
 
     if (entity.type === "skylight") {
       interactionRef.current = {
-        type: "resize-skylight",
+        type: "drag-entity",
         pointerId: event.pointerId,
         startScreen: { x: event.clientX, y: event.clientY },
         startWorld: world,
@@ -2012,6 +2374,16 @@ export function Workspace() {
 
   const handleWallPointDown = (event: ReactPointerEvent<SVGCircleElement>, point: WallPoint) => {
     event.stopPropagation();
+    if (event.pointerType === "touch" || event.pointerType === "pen") {
+      event.preventDefault();
+    }
+
+    if (state.activeTool === "text") {
+      const world = getEventWorld(event);
+      openCreateTextModal(world);
+      return;
+    }
+
     dispatch({ type: "SET_SELECTION", selection: { kind: "wallPoint", id: point.id } });
 
     if (state.activeTool !== "select" && state.activeTool !== "wall") {
@@ -2032,6 +2404,16 @@ export function Workspace() {
 
   const handleWallSegmentClick = (event: ReactPointerEvent<SVGLineElement>, segment: WallSegment) => {
     event.stopPropagation();
+    if (event.pointerType === "touch" || event.pointerType === "pen") {
+      event.preventDefault();
+    }
+
+    if (state.activeTool === "text") {
+      const world = getEventWorld(event);
+      openCreateTextModal(world);
+      return;
+    }
+
     dispatch({ type: "SET_SELECTION", selection: { kind: "wallSegment", id: segment.id } });
   };
 
@@ -2098,6 +2480,21 @@ export function Workspace() {
     svgRef.current?.setPointerCapture(event.pointerId);
   };
 
+  const startSkylightResize = (event: ReactPointerEvent<SVGElement>, entity: MapEntity, handle: ResizeHandle) => {
+    event.stopPropagation();
+    dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: entity.id } });
+    interactionRef.current = {
+      type: "resize-rect",
+      pointerId: event.pointerId,
+      startScreen: { x: event.clientX, y: event.clientY },
+      startWorld: getEventWorld(event),
+      targetId: entity.id,
+      entitySnapshot: entity,
+      resizeHandle: handle,
+    };
+    svgRef.current?.setPointerCapture(event.pointerId);
+  };
+
   const renderedEntities = floor.entities
     .map((entity, index) => ({ entity, index }))
     .sort((a, b) => {
@@ -2109,6 +2506,18 @@ export function Workspace() {
       return a.index - b.index;
     })
     .map((item) => item.entity);
+
+  const previewAdjustedEntities = useMemo(() => {
+    if (!state.previewEntity) {
+      return renderedEntities;
+    }
+    return renderedEntities.map((entity) =>
+      entity.id === state.previewEntity?.id ? state.previewEntity : entity,
+    );
+  }, [renderedEntities, state.previewEntity]);
+
+  const renderedNonTextEntities = previewAdjustedEntities.filter((entity) => entity.type !== "text");
+  const renderedTextEntities = previewAdjustedEntities.filter((entity) => entity.type === "text");
 
   return (
     <div className="workspace-wrap">
@@ -2122,6 +2531,18 @@ export function Workspace() {
         onContextMenu={(event) => event.preventDefault()}
         onWheel={handleWheel}
       >
+        <defs>
+          <pattern
+            id="unconditioned-hatch"
+            patternUnits="userSpaceOnUse"
+            width={3.2}
+            height={3.2}
+            patternTransform="rotate(45)"
+          >
+            <line x1={0} y1={0} x2={0} y2={3.2} stroke="#af8c8c" strokeWidth={0.14} />
+          </pattern>
+        </defs>
+
         <rect x="0" y="0" width="100%" height="100%" fill="#b7cec5" />
 
         <g transform={`translate(${state.camera.x}, ${state.camera.y}) scale(${state.camera.zoom})`}>
@@ -2214,7 +2635,7 @@ export function Workspace() {
             );
           })}
 
-          {renderedEntities.map((entity) => {
+          {renderedNonTextEntities.map((entity) => {
             const selected = state.selection.kind === "entity" && state.selection.id === entity.id;
             const common = {
               transform: `translate(${entity.x} ${entity.y}) rotate(${entity.rotation})`,
@@ -2228,7 +2649,11 @@ export function Workspace() {
                   event.stopPropagation();
                   const next = window.prompt("Label", entity.label);
                   if (next !== null) {
-                    dispatch({ type: "UPDATE_ENTITY_LABEL", entityId: entity.id, label: next });
+                    dispatch({
+                      type: "UPDATE_ENTITY_LABEL",
+                      entityId: entity.id,
+                      label: entity.type === "text" ? next.toUpperCase() : next,
+                    });
                   }
                 }}
               >
@@ -2242,24 +2667,6 @@ export function Workspace() {
                     strokeWidth={0.42}
                     shapeRendering="crispEdges"
                   />
-                ) : entity.type === "text" ? (
-                  <g>
-                    <rect
-                      x={-0.3}
-                      y={-0.7}
-                      width={Math.max(2, entity.label.length * 0.58)}
-                      height={1.3}
-                      fill="transparent"
-                    />
-                    <text
-                      x={0}
-                      y={0}
-                      className="map-text-label"
-                      fill={getTextColor(String(entity.metadata.color ?? "WHITE"))}
-                    >
-                      {entity.label || "TEXT"}
-                    </text>
-                  </g>
                 ) : entity.type === "door" ? (
                   <g>
                     {(() => {
@@ -2438,15 +2845,53 @@ export function Workspace() {
                       height={Math.max(entity.height, 0.4)}
                       preserveAspectRatio="xMidYMid meet"
                     />
+                    {entity.label && (
+                      <text
+                        x={0}
+                        y={entity.height / 2 + 0.72}
+                        textAnchor="middle"
+                        className="map-text-label"
+                        fill={getTextColor(String(entity.metadata.color ?? "WHITE"))}
+                        fontSize={0.74}
+                        style={{ fontSize: "0.74px" }}
+                      >
+                        {entity.label.toUpperCase()}
+                      </text>
+                    )}
+                  </g>
+                ) : entity.type === "rectangle" ? (
+                  <g>
+                    <rect
+                      x={0}
+                      y={0}
+                      width={Math.max(entity.width, 0.4)}
+                      height={Math.max(entity.height, 0.4)}
+                      rx={0.1}
+                      fill={getRectangleFillColor(entity.metadata.color ?? "White")}
+                      stroke={selected ? "#ffe59a" : "#ffffff"}
+                      strokeWidth={selected ? 0.28 : 0.22}
+                      shapeRendering="crispEdges"
+                    />
+                    {Boolean(entity.metadata.unconditioned) && (
+                      <rect
+                        x={0}
+                        y={0}
+                        width={Math.max(entity.width, 0.4)}
+                        height={Math.max(entity.height, 0.4)}
+                        rx={0.1}
+                        fill="url(#unconditioned-hatch)"
+                        pointerEvents="none"
+                      />
+                    )}
                   </g>
                 ) : (
                   <rect
-                    x={entity.type === "rectangle" ? 0 : -entity.width / 2}
-                    y={entity.type === "rectangle" ? 0 : -entity.height / 2}
+                    x={-entity.width / 2}
+                    y={-entity.height / 2}
                     width={Math.max(entity.width, 0.4)}
                     height={Math.max(entity.height, 0.4)}
                     rx={0.1}
-                    fill={entity.type === "rectangle" ? getRectangleFillColor(entity.metadata.color ?? "White") : "#3f757c"}
+                    fill="#3f757c"
                     stroke={selected ? "#ffe59a" : "#ffffff"}
                     strokeWidth={selected ? 0.28 : 0.22}
                     shapeRendering="crispEdges"
@@ -2621,6 +3066,85 @@ export function Workspace() {
             );
           })()}
 
+          {selectedSkylightEntity && (() => {
+            const x1 = selectedSkylightEntity.x - selectedSkylightEntity.width / 2;
+            const y1 = selectedSkylightEntity.y - selectedSkylightEntity.height / 2;
+            const x2 = selectedSkylightEntity.x + selectedSkylightEntity.width / 2;
+            const y2 = selectedSkylightEntity.y + selectedSkylightEntity.height / 2;
+            const midX = (x1 + x2) / 2;
+            const midY = (y1 + y2) / 2;
+            const anchors: Array<{ x: number; y: number; handle: ResizeHandle; cursor: string }> = [
+              { x: x1, y: y1, handle: "nw", cursor: "nwse-resize" },
+              { x: x2, y: y1, handle: "ne", cursor: "nesw-resize" },
+              { x: x1, y: y2, handle: "sw", cursor: "nesw-resize" },
+              { x: x2, y: y2, handle: "se", cursor: "nwse-resize" },
+            ];
+
+            return (
+              <g className="rect-resize-controls">
+                <line
+                  x1={x1}
+                  y1={y1}
+                  x2={x2}
+                  y2={y1}
+                  stroke="transparent"
+                  strokeWidth={1.1}
+                  style={{ cursor: "ns-resize" }}
+                  onPointerDown={(event) => startSkylightResize(event, selectedSkylightEntity, "n")}
+                />
+                <line
+                  x1={x1}
+                  y1={y2}
+                  x2={x2}
+                  y2={y2}
+                  stroke="transparent"
+                  strokeWidth={1.1}
+                  style={{ cursor: "ns-resize" }}
+                  onPointerDown={(event) => startSkylightResize(event, selectedSkylightEntity, "s")}
+                />
+                <line
+                  x1={x1}
+                  y1={y1}
+                  x2={x1}
+                  y2={y2}
+                  stroke="transparent"
+                  strokeWidth={1.1}
+                  style={{ cursor: "ew-resize" }}
+                  onPointerDown={(event) => startSkylightResize(event, selectedSkylightEntity, "w")}
+                />
+                <line
+                  x1={x2}
+                  y1={y1}
+                  x2={x2}
+                  y2={y2}
+                  stroke="transparent"
+                  strokeWidth={1.1}
+                  style={{ cursor: "ew-resize" }}
+                  onPointerDown={(event) => startSkylightResize(event, selectedSkylightEntity, "e")}
+                />
+
+                <circle cx={midX} cy={y1} r={0.16} fill="#ffffff" stroke="#4f6862" strokeWidth={0.05} pointerEvents="none" />
+                <circle cx={midX} cy={y2} r={0.16} fill="#ffffff" stroke="#4f6862" strokeWidth={0.05} pointerEvents="none" />
+                <circle cx={x1} cy={midY} r={0.16} fill="#ffffff" stroke="#4f6862" strokeWidth={0.05} pointerEvents="none" />
+                <circle cx={x2} cy={midY} r={0.16} fill="#ffffff" stroke="#4f6862" strokeWidth={0.05} pointerEvents="none" />
+
+                {anchors.map((anchor) => (
+                  <circle
+                    key={`sk-${anchor.handle}-${anchor.x}-${anchor.y}`}
+                    cx={anchor.x}
+                    cy={anchor.y}
+                    r={0.26}
+                    fill="#ffffff"
+                    stroke="#4f6862"
+                    strokeWidth={0.06}
+                    style={{ cursor: anchor.cursor }}
+                    onPointerDown={(event) => startSkylightResize(event, selectedSkylightEntity, anchor.handle)}
+                  />
+                ))}
+              </g>
+            );
+          })()}
+
           {state.activeTool === "wall" && state.wallDraftPointId && hoverWorld && pointById.get(state.wallDraftPointId) && (
             <line
               x1={pointById.get(state.wallDraftPointId)?.x}
@@ -2632,6 +3156,59 @@ export function Workspace() {
               strokeWidth={0.1}
             />
           )}
+
+          {renderedTextEntities.map((entity) => {
+            const selected = state.selection.kind === "entity" && state.selection.id === entity.id;
+            const bounds = getTextBounds(entity.label, getTextSize(entity));
+            return (
+              <g
+                key={entity.id}
+                transform={`translate(${entity.x} ${entity.y}) rotate(${entity.rotation})`}
+                onPointerDown={(event) => handleEntityDown(event, entity)}
+                onDoubleClick={(event) => {
+                  event.stopPropagation();
+                  const next = window.prompt("Label", entity.label);
+                  if (next !== null) {
+                    dispatch({
+                      type: "UPDATE_ENTITY_LABEL",
+                      entityId: entity.id,
+                      label: next.toUpperCase(),
+                    });
+                  }
+                }}
+              >
+                {selected && (
+                  <rect
+                    x={bounds.selectionX}
+                    y={bounds.selectionY}
+                    width={bounds.selectionWidth}
+                    height={bounds.selectionHeight}
+                    fill="transparent"
+                    stroke="#ffe59a"
+                    strokeWidth={0.16}
+                    rx={0.1}
+                  />
+                )}
+                <rect
+                  x={bounds.contentX}
+                  y={bounds.contentY}
+                  width={bounds.contentWidth}
+                  height={bounds.contentHeight}
+                  fill="transparent"
+                />
+                <text
+                  x={0}
+                  y={0}
+                  className="map-text-label"
+                  fill={getTextColor(String(entity.metadata.color ?? "WHITE"))}
+                  fontSize={bounds.fontSize}
+                  style={{ fontSize: `${bounds.fontSize}px` }}
+                >
+                  {bounds.safeLabel}
+                </text>
+              </g>
+            );
+          })}
 
         </g>
       </svg>
@@ -2647,6 +3224,7 @@ export function Workspace() {
 
           const metadata = {
             color: payload.color,
+            unconditioned: payload.unconditioned,
             ceilingType: payload.ceilingType,
             standardHeightFt: payload.standardHeightFt,
             lowHeightFt: payload.lowHeightFt,
@@ -2698,11 +3276,35 @@ export function Workspace() {
             return;
           }
 
+          if (textModalState.mode === "edit" && textModalState.entityId) {
+            const existing = floor.entities.find((entity) => entity.id === textModalState.entityId);
+            if (!existing || existing.type !== "text") {
+              setTextModalState(null);
+              return;
+            }
+
+            const updated: MapEntity = {
+              ...existing,
+              label: payload.text.toUpperCase(),
+              metadata: {
+                ...existing.metadata,
+                color: payload.color,
+                textSize: payload.size,
+              },
+            };
+
+            dispatch({ type: "UPSERT_ENTITY", entity: updated });
+            dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: updated.id } });
+            setTextModalState(null);
+            return;
+          }
+
           const textEntity = createEntityFromTool("text", textModalState.anchor.x, textModalState.anchor.y);
-          textEntity.label = payload.text;
+          textEntity.label = payload.text.toUpperCase();
           textEntity.metadata = {
             ...textEntity.metadata,
             color: payload.color,
+            textSize: payload.size,
           };
 
           dispatch({ type: "UPSERT_ENTITY", entity: textEntity });
@@ -2765,6 +3367,38 @@ export function Workspace() {
           dispatch({ type: "UPSERT_ENTITY", entity: updated });
           dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: updated.id } });
           setWindowModalState(null);
+        }}
+      />
+
+      <UtilityLabelModal
+        isOpen={utilityLabelModalState !== null}
+        initialValues={{
+          text: utilityLabelModalState?.initialText ?? "",
+          color: utilityLabelModalState?.initialColor ?? "WHITE",
+        }}
+        onCancel={() => setUtilityLabelModalState(null)}
+        onSubmit={(payload: UtilityLabelSubmit) => {
+          if (!utilityLabelModalState) {
+            return;
+          }
+
+          const existing = floor.entities.find((entity) => entity.id === utilityLabelModalState.entityId);
+          if (!existing || !isUtilityEntityType(existing.type)) {
+            setUtilityLabelModalState(null);
+            return;
+          }
+
+          const updated: MapEntity = {
+            ...existing,
+            label: payload.text.toUpperCase(),
+            metadata: {
+              ...existing.metadata,
+              color: payload.color,
+            },
+          };
+          dispatch({ type: "UPSERT_ENTITY", entity: updated });
+          dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: updated.id } });
+          setUtilityLabelModalState(null);
         }}
       />
 
