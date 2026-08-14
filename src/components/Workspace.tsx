@@ -8,6 +8,8 @@ import { DoorModal } from "./DoorModal";
 import type { DoorModalSubmit } from "./DoorModal";
 import { WindowModal } from "./WindowModal";
 import type { WindowModalSubmit } from "./WindowModal";
+import { SlidingGlassDoorModal } from "./SlidingGlassDoorModal";
+import type { SlidingGlassDoorModalSubmit } from "./SlidingGlassDoorModal";
 import { UtilityLabelModal } from "./UtilityLabelModal";
 import type { UtilityLabelSubmit } from "./UtilityLabelModal";
 import { useEditor } from "../state/EditorContext";
@@ -38,12 +40,13 @@ interface InteractionState {
     | "resize-window"
     | "resize-skylight";
   pointerId: number | null;
+  pointerType?: string;
   startScreen: Point;
   startWorld: Point;
   targetId?: string;
   sourceRectangleId?: string;
   windowHandle?: "start" | "end";
-  tapAction?: "flip-door";
+  tapAction?: "flip-door" | "deselect-empty";
   entitySnapshot?: MapEntity;
   pointSnapshot?: WallPoint;
   resizeHandle?: ResizeHandle;
@@ -79,19 +82,59 @@ const WINDOW_SELECTION_PADDING = 0.12;
 const WINDOW_ANCHOR_WIDTH = 0.22;
 const WINDOW_ANCHOR_HEIGHT = 0.46;
 const WINDOW_LABEL_OFFSET = 1.02;
-const LINEAR_MARKER_COLOR = "#96677a";
+const LINEAR_MARKER_COLOR = "#edf5ff";
+const DOOR_FILL_COLOR = "#ffaa00";
+const OPENING_ACCENT_COLOR = "#00dbff";
+const SINGLE_DOOR_DEFAULT_WIDTH = 3;
+const DOUBLE_DOOR_DEFAULT_WIDTH = 6;
+const DOOR_DEFAULT_HEIGHT = 7;
+const SLIDING_DOOR_DEFAULT_WIDTH = 6;
+const SLIDING_DOOR_DEFAULT_HEIGHT = 7;
+const SINGLE_DOOR_VISUAL_WIDTH = 3;
+const DOUBLE_DOOR_VISUAL_WIDTH = 6;
+
+type DoorKind = "single" | "double" | "sliding";
+
+function getDoorKind(entity: MapEntity): DoorKind {
+  if (entity.type !== "door") {
+    return "single";
+  }
+  const value = String(entity.metadata.doorKind ?? "single").toLowerCase();
+  if (value === "double" || value === "sliding") {
+    return value;
+  }
+  return "single";
+}
+
+function isSlidingDoor(entity: MapEntity): boolean {
+  return entity.type === "door" && getDoorKind(entity) === "sliding";
+}
+
+function getDoorVisualWidth(entity: MapEntity): number {
+  const kind = getDoorKind(entity);
+  if (kind === "double") {
+    return DOUBLE_DOOR_VISUAL_WIDTH;
+  }
+  if (kind === "sliding") {
+    return Math.max(1, entity.width);
+  }
+  return SINGLE_DOOR_VISUAL_WIDTH;
+}
 
 function getRectangleFillColor(color: string): string {
   switch (color.toLowerCase()) {
     case "blue":
       return "rgba(56, 142, 255, 0.5)";
+    case "green":
+      return "rgba(42, 181, 106, 0.5)";
     case "red":
       return "rgba(217, 74, 67, 0.5)";
     case "yellow":
       return "rgba(242, 202, 69, 0.5)";
     case "white":
-    default:
       return "rgba(255, 255, 255, 0.5)";
+    default:
+      return "rgba(56, 142, 255, 0.5)";
   }
 }
 
@@ -112,18 +155,31 @@ function RectangleCeilingOverlay({ entity }: { entity: MapEntity }) {
   const xCenter = entity.width / 2;
   const yCenter = entity.height / 2;
   const inset = 1.2;
-  const heightLabelY = Math.max(0.8, yCenter - 1.8);
   const isCathedralVertical = ceilingType === "cathedral";
   const isCathedralHorizontal = ceilingType === "cathedral-horizontal";
   const isSlopedHorizontal = ceilingType === "sloped-horizontal";
 
   if (ceilingType === "standard") {
+    const heightValueY = yCenter + 0.28;
+    const heightTitleY = heightValueY - 0.86;
+    const boxWidth = Math.max(3.4, Math.min(entity.width - 1, 5.2));
+    const boxHeight = 1.86;
+    const boxX = xCenter - boxWidth / 2;
+    const boxY = heightTitleY - 0.72;
     return (
       <g className="ceiling-overlay" pointerEvents="none">
-        <text x={xCenter} y={heightLabelY} textAnchor="middle" className="ceiling-caption">
+        <rect
+          x={boxX}
+          y={boxY}
+          width={boxWidth}
+          height={boxHeight}
+          rx={0.2}
+          className="ceiling-height-box"
+        />
+        <text x={xCenter} y={heightTitleY} textAnchor="middle" className="ceiling-caption">
           HEIGHT
         </text>
-        <text x={xCenter} y={yCenter} textAnchor="middle" className="ceiling-label">
+        <text x={xCenter} y={heightValueY} textAnchor="middle" className="ceiling-label">
           {fmtFeet(standardHeight)}
         </text>
       </g>
@@ -335,8 +391,16 @@ interface WindowModalState {
 
 interface DoorModalState {
   entityId: string;
+  kind: "single" | "double";
+  initialWidthFt: number;
   initialHeightFt: number;
   initialMirrored: boolean;
+}
+
+interface SlidingDoorModalState {
+  entityId: string;
+  initialWidthFt: number;
+  initialHeightFt: number;
 }
 
 interface UtilityLabelModalState {
@@ -356,7 +420,7 @@ interface LongPressState {
 const DEFAULT_RECTANGLE_MODAL_VALUES: RectangleModalInitialValues = {
   widthFt: 12,
   heightFt: 12,
-  color: "WHITE",
+  color: "BLUE",
   unconditioned: false,
   ceilingType: "standard",
   standardHeightFt: 8,
@@ -469,6 +533,7 @@ function PerimeterGuides({ guides }: { guides: GuideSegment[] }) {
   const minLabelSeparation = 2.4;
   const markerStrokeWidth = 0.21;
   const markerColor = LINEAR_MARKER_COLOR;
+  const capSize = 0.46;
 
   type PositionedGuide = {
     segment: GuideSegment;
@@ -544,6 +609,8 @@ function PerimeterGuides({ guides }: { guides: GuideSegment[] }) {
           return (
             <g key={`gh-${index}-${segment.y}-${segment.x1}-${segment.x2}`}>
               <line x1={segment.x1} y1={lineAxis} x2={segment.x2} y2={lineAxis} stroke={markerColor} strokeWidth={markerStrokeWidth} />
+              <line x1={segment.x1} y1={lineAxis - capSize} x2={segment.x1} y2={lineAxis + capSize} stroke={markerColor} strokeWidth={markerStrokeWidth} />
+              <line x1={segment.x2} y1={lineAxis - capSize} x2={segment.x2} y2={lineAxis + capSize} stroke={markerColor} strokeWidth={markerStrokeWidth} />
               <text x={labelX} y={labelY} className="dim-label" textAnchor="middle" dominantBaseline="middle">
                 {fmtFeet(segment.x2 - segment.x1)}
               </text>
@@ -554,6 +621,8 @@ function PerimeterGuides({ guides }: { guides: GuideSegment[] }) {
         return (
           <g key={`gv-${index}-${segment.x}-${segment.y1}-${segment.y2}`}>
             <line x1={lineAxis} y1={segment.y1} x2={lineAxis} y2={segment.y2} stroke={markerColor} strokeWidth={markerStrokeWidth} />
+            <line x1={lineAxis - capSize} y1={segment.y1} x2={lineAxis + capSize} y2={segment.y1} stroke={markerColor} strokeWidth={markerStrokeWidth} />
+            <line x1={lineAxis - capSize} y1={segment.y2} x2={lineAxis + capSize} y2={segment.y2} stroke={markerColor} strokeWidth={markerStrokeWidth} />
             <text
               x={labelX}
               y={labelY}
@@ -581,16 +650,21 @@ function DraftRectangleGuides({ rect }: { rect: RectBounds }) {
   const hOffset = 2.8;
   const vOffset = 2.8;
   const markerStrokeWidth = 0.21;
-  const markerColor = "#96677a";
+  const markerColor = LINEAR_MARKER_COLOR;
+  const capSize = 0.42;
 
   return (
     <g className="rect-guides" pointerEvents="none">
       <line x1={x1} y1={y2 + hOffset} x2={x2} y2={y2 + hOffset} stroke={markerColor} strokeWidth={markerStrokeWidth} />
+      <line x1={x1} y1={y2 + hOffset - capSize} x2={x1} y2={y2 + hOffset + capSize} stroke={markerColor} strokeWidth={markerStrokeWidth} />
+      <line x1={x2} y1={y2 + hOffset - capSize} x2={x2} y2={y2 + hOffset + capSize} stroke={markerColor} strokeWidth={markerStrokeWidth} />
       <text x={midX} y={y2 + hOffset + 0.8} className="dim-label" textAnchor="middle">
         {fmtFeet(rect.width)}
       </text>
 
       <line x1={x1 - vOffset} y1={y1} x2={x1 - vOffset} y2={y2} stroke={markerColor} strokeWidth={markerStrokeWidth} />
+      <line x1={x1 - vOffset - capSize} y1={y1} x2={x1 - vOffset + capSize} y2={y1} stroke={markerColor} strokeWidth={markerStrokeWidth} />
+      <line x1={x1 - vOffset - capSize} y1={y2} x2={x1 - vOffset + capSize} y2={y2} stroke={markerColor} strokeWidth={markerStrokeWidth} />
       <text
         x={x1 - vOffset - 0.56}
         y={midY}
@@ -600,6 +674,32 @@ function DraftRectangleGuides({ rect }: { rect: RectBounds }) {
         transform={`rotate(90 ${x1 - vOffset - 0.56} ${midY})`}
       >
         {fmtFeet(rect.height)}
+      </text>
+    </g>
+  );
+}
+
+function RectangleDragSizeCue({ rect }: { rect: RectBounds }) {
+  const width = Math.max(1, Math.round(Math.abs(rect.width)));
+  const height = Math.max(1, Math.round(Math.abs(rect.height)));
+  const centerX = rect.x + width / 2;
+  const centerY = rect.y + height / 2;
+  const minSide = Math.max(1, Math.min(width, height));
+  const fontSize = clampValue(minSide * 0.42, 0.95, 5.4);
+
+  return (
+    <g pointerEvents="none" className="rect-drag-size-cue">
+      <text
+        x={centerX}
+        y={centerY}
+        textAnchor="middle"
+        dominantBaseline="middle"
+        fill={LINEAR_MARKER_COLOR}
+        fontSize={fontSize}
+        fontWeight={900}
+        style={{ fontSize: `${fontSize}px` }}
+      >
+        {`${fmtFeet(width)} x ${fmtFeet(height)}`}
       </text>
     </g>
   );
@@ -1019,6 +1119,145 @@ function lockWindowPointToHostEdge(world: Point, entity: MapEntity, rectangles: 
   return { x: Math.round(x2), y: Math.round(clampValue(world.y, y1, y2)) };
 }
 
+interface OpeningSpan {
+  start: number;
+  end: number;
+}
+
+function getOpeningSpansForEdge(
+  entities: MapEntity[],
+  hostRectId: string,
+  edge: RectEdge,
+  excludeEntityId?: string,
+): OpeningSpan[] {
+  const horizontal = edge === "top" || edge === "bottom";
+
+  return entities
+    .filter((entity) => {
+      if (entity.id === excludeEntityId) {
+        return false;
+      }
+      if (entity.type !== "door" && entity.type !== "window") {
+        return false;
+      }
+      return entity.metadata.hostRectId === hostRectId && entity.metadata.edge === edge;
+    })
+    .map((entity) => {
+      const axis = horizontal ? entity.x : entity.y;
+      const half = Math.abs(entity.width) / 2;
+      return {
+        start: axis - half,
+        end: axis + half,
+      };
+    })
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+}
+
+function resolveAxisWithoutOverlap(
+  desiredAxis: number,
+  axisMin: number,
+  axisMax: number,
+  halfWidth: number,
+  blockers: OpeningSpan[],
+): number | null {
+  if (axisMin > axisMax) {
+    return null;
+  }
+
+  const forbidden = blockers
+    .map((block) => ({
+      start: Math.max(axisMin, block.start - halfWidth),
+      end: Math.min(axisMax, block.end + halfWidth),
+    }))
+    .filter((range) => range.end > range.start)
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+
+  const merged: Array<{ start: number; end: number }> = [];
+  for (const range of forbidden) {
+    const previous = merged[merged.length - 1];
+    if (!previous || range.start >= previous.end) {
+      merged.push({ ...range });
+    } else {
+      previous.end = Math.max(previous.end, range.end);
+    }
+  }
+
+  const allowed: Array<{ start: number; end: number }> = [];
+  let cursor = axisMin;
+  for (const range of merged) {
+    if (range.start >= cursor) {
+      allowed.push({ start: cursor, end: range.start });
+    }
+    cursor = Math.max(cursor, range.end);
+  }
+  if (cursor <= axisMax) {
+    allowed.push({ start: cursor, end: axisMax });
+  }
+
+  if (allowed.length === 0) {
+    return null;
+  }
+
+  let bestAxis = allowed[0].start;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const range of allowed) {
+    if (range.end < range.start) {
+      continue;
+    }
+    const candidate = clampValue(desiredAxis, range.start, range.end);
+    const distanceFromDesired = Math.abs(candidate - desiredAxis);
+    if (distanceFromDesired < bestDistance) {
+      bestDistance = distanceFromDesired;
+      bestAxis = candidate;
+    }
+  }
+
+  return bestAxis;
+}
+
+function resolveOpeningPositionWithoutOverlap(
+  entity: MapEntity,
+  desiredPosition: Point,
+  entities: MapEntity[],
+  rectangles: MapEntity[],
+  excludeEntityId?: string,
+): Point | null {
+  const edge = entity.metadata.edge as RectEdge | undefined;
+  const hostRectId = entity.metadata.hostRectId as string | undefined;
+  if (!edge || !hostRectId) {
+    return desiredPosition;
+  }
+
+  const hostRect = getHostRectForEntity(entity, rectangles);
+  if (!hostRect) {
+    return desiredPosition;
+  }
+
+  const horizontal = edge === "top" || edge === "bottom";
+  const halfWidth = Math.abs(entity.width) / 2;
+  const axisMin = (horizontal ? hostRect.x : hostRect.y) + halfWidth;
+  const axisMax = (horizontal ? hostRect.x + hostRect.width : hostRect.y + hostRect.height) - halfWidth;
+  const desiredAxis = horizontal ? desiredPosition.x : desiredPosition.y;
+
+  const blockers = getOpeningSpansForEdge(entities, hostRectId, edge, excludeEntityId);
+  const resolvedAxis = resolveAxisWithoutOverlap(desiredAxis, axisMin, axisMax, halfWidth, blockers);
+  if (resolvedAxis === null) {
+    return null;
+  }
+
+  if (horizontal) {
+    return {
+      x: resolvedAxis,
+      y: edge === "top" ? hostRect.y : hostRect.y + hostRect.height,
+    };
+  }
+
+  return {
+    x: edge === "left" ? hostRect.x : hostRect.x + hostRect.width,
+    y: resolvedAxis,
+  };
+}
+
 function applyRectResize(rect: RectBounds, world: Point, handle: ResizeHandle): RectBounds {
   let x1 = rect.x;
   let y1 = rect.y;
@@ -1046,6 +1285,23 @@ function applyRectResize(rect: RectBounds, world: Point, handle: ResizeHandle): 
   };
 }
 
+function canStartLongPress(pointerType: string, button: number): boolean {
+  if (button !== 0) {
+    return false;
+  }
+  return pointerType === "mouse" || pointerType === "touch" || pointerType === "pen";
+}
+
+function getDragThresholdPx(pointerType: string | undefined): number {
+  if (pointerType === "touch") {
+    return 12;
+  }
+  if (pointerType === "pen") {
+    return 3;
+  }
+  return 2;
+}
+
 export function Workspace() {
   const { state, dispatch } = useEditor();
   const floor = getFloor(state);
@@ -1057,6 +1313,7 @@ export function Workspace() {
   const [rectangleModalState, setRectangleModalState] = useState<RectangleModalState | null>(null);
   const [textModalState, setTextModalState] = useState<TextModalState | null>(null);
   const [doorModalState, setDoorModalState] = useState<DoorModalState | null>(null);
+  const [slidingDoorModalState, setSlidingDoorModalState] = useState<SlidingDoorModalState | null>(null);
   const [windowModalState, setWindowModalState] = useState<WindowModalState | null>(null);
   const [utilityLabelModalState, setUtilityLabelModalState] = useState<UtilityLabelModalState | null>(null);
   const [viewportSize, setViewportSize] = useState<ViewportSize>({ width: 0, height: 0 });
@@ -1098,13 +1355,17 @@ export function Workspace() {
     return candidate;
   }, [floor.entities, state.selection]);
 
-  const selectedWindowEdge = useMemo(() => {
+  const selectedOpeningEdge = useMemo(() => {
     const selection = state.selection;
     if (selection.kind !== "entity") {
       return null;
     }
     const candidate = floor.entities.find((entity) => entity.id === selection.id);
-    if (!candidate || candidate.type !== "window") {
+    if (!candidate) {
+      return null;
+    }
+    const supportsWindowHandles = candidate.type === "window" || isSlidingDoor(candidate);
+    if (!supportsWindowHandles) {
       return null;
     }
     return (candidate.metadata.edge as RectEdge | undefined) ?? "top";
@@ -1270,7 +1531,7 @@ export function Workspace() {
   const getRectangleModalInitialValues = (entity: MapEntity): RectangleModalInitialValues => ({
     widthFt: Math.max(1, Math.round(Math.abs(entity.width))),
     heightFt: Math.max(1, Math.round(Math.abs(entity.height))),
-    color: String(entity.metadata.color ?? "WHITE").toUpperCase(),
+    color: String(entity.metadata.color ?? "BLUE").toUpperCase(),
     unconditioned: Boolean(entity.metadata.unconditioned),
     ceilingType: (entity.metadata.ceilingType ?? "standard") as
       | "standard"
@@ -1290,12 +1551,36 @@ export function Workspace() {
     return { widthFt, heightFt };
   };
 
+  const getDefaultDoorKind = (): DoorKind => {
+    const value = String(state.project.metadata.doorDefaultType ?? "single").toLowerCase();
+    if (value === "double" || value === "sliding") {
+      return value;
+    }
+    return "single";
+  };
+
   const openCreateRectangleModal = (anchor: Point) => {
     setRectangleModalState({
       mode: "create",
       anchor: { x: Math.round(anchor.x), y: Math.round(anchor.y) },
       initialValues: DEFAULT_RECTANGLE_MODAL_VALUES,
     });
+  };
+
+  const startRectangleCanvasLongPress = (pointerId: number, anchor: Point, startScreen: Point) => {
+    clearLongPress();
+    longPressRef.current.pointerId = pointerId;
+    longPressRef.current.entityId = null;
+    longPressRef.current.startScreen = startScreen;
+    longPressRef.current.fired = false;
+    longPressRef.current.timer = setTimeout(() => {
+      longPressRef.current.fired = true;
+      setDraftEntity(null);
+      dispatch({ type: "CLEAR_PREVIEW_ENTITY" });
+      finishInteraction();
+      openCreateRectangleModal(anchor);
+      clearLongPress();
+    }, 520);
   };
 
   const openCreateTextModal = (anchor: Point) => {
@@ -1334,12 +1619,30 @@ export function Workspace() {
     });
   };
 
+  const openSlidingDoorModal = (entity: MapEntity) => {
+    if (!isSlidingDoor(entity)) {
+      return;
+    }
+    setSlidingDoorModalState({
+      entityId: entity.id,
+      initialWidthFt: Math.max(1, Math.round(Math.abs(entity.width))),
+      initialHeightFt: Math.max(1, Math.round(Math.abs(entity.height))),
+    });
+  };
+
   const openDoorModal = (entity: MapEntity) => {
     if (entity.type !== "door") {
       return;
     }
+    const kind = getDoorKind(entity);
+    if (kind === "sliding") {
+      openSlidingDoorModal(entity);
+      return;
+    }
     setDoorModalState({
       entityId: entity.id,
+      kind,
+      initialWidthFt: Math.max(1, Math.round(Math.abs(entity.width))),
       initialHeightFt: Math.max(1, Math.round(Math.abs(entity.height))),
       initialMirrored: Boolean(entity.metadata.mirrored),
     });
@@ -1356,7 +1659,11 @@ export function Workspace() {
     });
   };
 
-  const tryPlaceDoorOrWindow = (type: "door" | "window", world: Point): MapEntity | null => {
+  const tryPlaceDoorOrWindow = (
+    type: "door" | "window",
+    world: Point,
+    requestedDoorKind?: DoorKind,
+  ): MapEntity | null => {
     const snap = nearestRectangleEdge(world, rectangleEntities);
     if (!snap || snap.distance > 0.9) {
       return null;
@@ -1364,8 +1671,15 @@ export function Workspace() {
 
     const entity = createEntityFromTool(type, Math.round(snap.x), Math.round(snap.y));
     if (type === "door") {
-      entity.width = 3;
-      entity.height = 7;
+      const kind = requestedDoorKind ?? "single";
+      entity.metadata.doorKind = kind;
+      entity.width =
+        kind === "double"
+          ? DOUBLE_DOOR_DEFAULT_WIDTH
+          : kind === "sliding"
+            ? SLIDING_DOOR_DEFAULT_WIDTH
+            : SINGLE_DOOR_DEFAULT_WIDTH;
+      entity.height = kind === "sliding" ? SLIDING_DOOR_DEFAULT_HEIGHT : DOOR_DEFAULT_HEIGHT;
       entity.label = "";
     } else {
       const defaults = getDefaultWindowSize();
@@ -1380,11 +1694,25 @@ export function Workspace() {
     entity.metadata.flipped = false;
     entity.metadata.mirrored = false;
 
-    if (type === "window") {
-      const lockedCenter = lockWindowCenterToHostEdge({ x: snap.x, y: snap.y }, entity, rectangleEntities);
-      entity.x = lockedCenter.x;
-      entity.y = lockedCenter.y;
+    const doorKind = entity.type === "door" ? getDoorKind(entity) : null;
+    const lockedPosition =
+      type === "window" || doorKind === "sliding"
+        ? lockWindowCenterToHostEdge({ x: snap.x, y: snap.y }, entity, rectangleEntities)
+        : lockWindowPointToHostEdge({ x: snap.x, y: snap.y }, entity, rectangleEntities);
+
+    const resolvedPosition = resolveOpeningPositionWithoutOverlap(
+      entity,
+      lockedPosition,
+      floor.entities,
+      rectangleEntities,
+      entity.id,
+    );
+    if (!resolvedPosition) {
+      return null;
     }
+
+    entity.x = resolvedPosition.x;
+    entity.y = resolvedPosition.y;
 
     return entity;
   };
@@ -1401,6 +1729,20 @@ export function Workspace() {
   const startPinchGestureIfReady = () => {
     if (touchPointsRef.current.size !== 2) {
       return;
+    }
+    if (!pinchGestureRef.current.active) {
+      clearLongPress();
+      setDraftEntity(null);
+      dispatch({ type: "CLEAR_PREVIEW_ENTITY" });
+      if (interactionRef.current.pointerId !== null) {
+        svgRef.current?.releasePointerCapture(interactionRef.current.pointerId);
+      }
+      interactionRef.current = {
+        type: "none",
+        pointerId: null,
+        startScreen: { x: 0, y: 0 },
+        startWorld: { x: 0, y: 0 },
+      };
     }
     const points = [...touchPointsRef.current.values()];
     const a = points[0];
@@ -1448,12 +1790,33 @@ export function Workspace() {
     return true;
   };
 
-  const beginPan = (event: ReactPointerEvent<SVGSVGElement>) => {
+  const registerTouchPointer = (event: {
+    pointerType: string;
+    pointerId: number;
+    clientX: number;
+    clientY: number;
+  }): boolean => {
+    if (event.pointerType !== "touch") {
+      return false;
+    }
+    touchPointsRef.current.set(event.pointerId, getTouchScreenPoint(event));
+    svgRef.current?.setPointerCapture(event.pointerId);
+    startPinchGestureIfReady();
+    return touchPointsRef.current.size >= 2;
+  };
+
+  const beginPan = (
+    event: ReactPointerEvent<SVGSVGElement>,
+    options?: { tapAction?: InteractionState["tapAction"] },
+  ) => {
     interactionRef.current = {
       type: "pan",
       pointerId: event.pointerId,
+      pointerType: event.pointerType,
       startScreen: { x: event.clientX, y: event.clientY },
       startWorld: getEventWorld(event),
+      dragStarted: false,
+      tapAction: options?.tapAction,
     };
     svgRef.current?.setPointerCapture(event.pointerId);
   };
@@ -1463,14 +1826,8 @@ export function Workspace() {
       event.preventDefault();
     }
 
-    if (event.pointerType === "touch") {
-      const point = getTouchScreenPoint(event);
-      touchPointsRef.current.set(event.pointerId, point);
-      svgRef.current?.setPointerCapture(event.pointerId);
-      startPinchGestureIfReady();
-      if (touchPointsRef.current.size >= 2) {
-        return;
-      }
+    if (registerTouchPointer(event)) {
+      return;
     }
 
     if (event.button === 1 || event.button === 2 || event.altKey) {
@@ -1486,9 +1843,17 @@ export function Workspace() {
       const nextEntity = createEntityFromTool("rectangle", Math.round(world.x), Math.round(world.y));
       nextEntity.width = 1;
       nextEntity.height = 1;
+
+      startRectangleCanvasLongPress(
+        event.pointerId,
+        { x: Math.round(world.x), y: Math.round(world.y) },
+        { x: event.clientX, y: event.clientY },
+      );
+
       interactionRef.current = {
         type: "draw-rect",
         pointerId: event.pointerId,
+        pointerType: event.pointerType,
         startScreen: { x: event.clientX, y: event.clientY },
         startWorld: { x: Math.round(world.x), y: Math.round(world.y) },
         entitySnapshot: nextEntity,
@@ -1505,8 +1870,12 @@ export function Workspace() {
     }
 
     if (state.activeTool === "select") {
-      dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
-      beginPan(event);
+      if (event.pointerType === "touch") {
+        beginPan(event, { tapAction: "deselect-empty" });
+      } else {
+        dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
+        beginPan(event);
+      }
       return;
     }
 
@@ -1553,7 +1922,10 @@ export function Workspace() {
     }
 
     if (tool.entityType === "door" || tool.entityType === "window") {
-      const placed = tryPlaceDoorOrWindow(tool.entityType, world);
+      const placed =
+        tool.entityType === "door"
+          ? tryPlaceDoorOrWindow("door", world, getDefaultDoorKind())
+          : tryPlaceDoorOrWindow("window", world);
       if (!placed) {
         return;
       }
@@ -1567,6 +1939,7 @@ export function Workspace() {
       interactionRef.current = {
         type: "draw-rect",
         pointerId: event.pointerId,
+        pointerType: event.pointerType,
         startScreen: { x: event.clientX, y: event.clientY },
         startWorld: { x: Math.round(world.x), y: Math.round(world.y) },
         entitySnapshot: nextEntity,
@@ -1583,6 +1956,7 @@ export function Workspace() {
       interactionRef.current = {
         type: "draw-line",
         pointerId: event.pointerId,
+        pointerType: event.pointerType,
         startScreen: { x: event.clientX, y: event.clientY },
         startWorld: world,
         entitySnapshot: nextEntity,
@@ -1630,6 +2004,14 @@ export function Workspace() {
     }
 
     if (interaction.type === "pan") {
+      if (!interaction.dragStarted) {
+        const movedX = event.clientX - interaction.startScreen.x;
+        const movedY = event.clientY - interaction.startScreen.y;
+        if (Math.hypot(movedX, movedY) <= getDragThresholdPx(interaction.pointerType)) {
+          return;
+        }
+        interactionRef.current = { ...interaction, dragStarted: true };
+      }
       dispatch({ type: "PAN_CAMERA", dx: event.movementX, dy: event.movementY });
       return;
     }
@@ -1637,29 +2019,44 @@ export function Workspace() {
     if (interaction.type === "drag-entity" && interaction.targetId && interaction.entitySnapshot) {
       interaction.latestWorld = world;
 
-      if (interaction.tapAction === "flip-door" && interaction.entitySnapshot.type === "door") {
+      if (!interaction.dragStarted) {
         const movedX = event.clientX - interaction.startScreen.x;
         const movedY = event.clientY - interaction.startScreen.y;
-        if (!interaction.dragStarted) {
-          if (Math.hypot(movedX, movedY) <= 8) {
-            return;
-          }
-          interaction.dragStarted = true;
+        if (Math.hypot(movedX, movedY) <= getDragThresholdPx(interaction.pointerType)) {
+          return;
         }
+        interactionRef.current = { ...interaction, dragStarted: true };
       }
 
       const dx = world.x - interaction.startWorld.x;
       const dy = world.y - interaction.startWorld.y;
 
       if (interaction.entitySnapshot.type === "door") {
-        const next = lockWindowPointToHostEdge(
-          {
-            x: interaction.entitySnapshot.x + dx,
-            y: interaction.entitySnapshot.y + dy,
-          },
-          interaction.entitySnapshot,
-          rectangleEntities,
-        );
+        const locked = isSlidingDoor(interaction.entitySnapshot)
+          ? lockWindowCenterToHostEdge(
+              {
+                x: interaction.entitySnapshot.x + dx,
+                y: interaction.entitySnapshot.y + dy,
+              },
+              interaction.entitySnapshot,
+              rectangleEntities,
+            )
+          : lockWindowPointToHostEdge(
+              {
+                x: interaction.entitySnapshot.x + dx,
+                y: interaction.entitySnapshot.y + dy,
+              },
+              interaction.entitySnapshot,
+              rectangleEntities,
+            );
+        const next =
+          resolveOpeningPositionWithoutOverlap(
+            interaction.entitySnapshot,
+            locked,
+            floor.entities,
+            rectangleEntities,
+            interaction.entitySnapshot.id,
+          ) ?? { x: interaction.entitySnapshot.x, y: interaction.entitySnapshot.y };
         dispatch({
           type: "SET_PREVIEW_ENTITY",
           entity: {
@@ -1672,7 +2069,7 @@ export function Workspace() {
       }
 
       if (interaction.entitySnapshot.type === "window") {
-        const next = lockWindowCenterToHostEdge(
+        const locked = lockWindowCenterToHostEdge(
           {
             x: interaction.entitySnapshot.x + dx,
             y: interaction.entitySnapshot.y + dy,
@@ -1680,6 +2077,14 @@ export function Workspace() {
           interaction.entitySnapshot,
           rectangleEntities,
         );
+        const next =
+          resolveOpeningPositionWithoutOverlap(
+            interaction.entitySnapshot,
+            locked,
+            floor.entities,
+            rectangleEntities,
+            interaction.entitySnapshot.id,
+          ) ?? { x: interaction.entitySnapshot.x, y: interaction.entitySnapshot.y };
         dispatch({
           type: "SET_PREVIEW_ENTITY",
           entity: {
@@ -1707,6 +2112,14 @@ export function Workspace() {
     }
 
     if (interaction.type === "drag-wall-point" && interaction.targetId && interaction.pointSnapshot) {
+      if (!interaction.dragStarted) {
+        const movedX = event.clientX - interaction.startScreen.x;
+        const movedY = event.clientY - interaction.startScreen.y;
+        if (Math.hypot(movedX, movedY) <= getDragThresholdPx(interaction.pointerType)) {
+          return;
+        }
+        interactionRef.current = { ...interaction, dragStarted: true };
+      }
       const next = snapPointToGrid(world);
       dispatch({ type: "MOVE_WALL_POINT", pointId: interaction.targetId, x: next.x, y: next.y });
       return;
@@ -1747,13 +2160,15 @@ export function Workspace() {
 
     if (interaction.type === "resize-window" && interaction.targetId && interaction.entitySnapshot) {
       const snapshot = interaction.entitySnapshot;
-      if (snapshot.type !== "window") {
+      const isWindowLike = snapshot.type === "window" || isSlidingDoor(snapshot);
+      if (!isWindowLike) {
         return;
       }
 
       const edge = (snapshot.metadata.edge as RectEdge | undefined) ?? "top";
+      const hostRectId = snapshot.metadata.hostRectId as string | undefined;
       const hostRect = getHostRectForEntity(snapshot, rectangleEntities);
-      if (!hostRect) {
+      if (!hostRect || !hostRectId) {
         return;
       }
       const locked = lockWindowPointToHostEdge(world, snapshot, rectangleEntities);
@@ -1766,8 +2181,24 @@ export function Workspace() {
       const axisMin = horizontalEdge ? hostRect.x : hostRect.y;
       const axisMax = horizontalEdge ? hostRect.x + hostRect.width : hostRect.y + hostRect.height;
       const rawDragged = horizontalEdge ? locked.x : locked.y;
-      const minDragged = handle === "start" ? axisMin : fixedAxis + 1;
-      const maxDragged = handle === "start" ? fixedAxis - 1 : axisMax;
+      let minDragged = handle === "start" ? axisMin : fixedAxis + 1;
+      let maxDragged = handle === "start" ? fixedAxis - 1 : axisMax;
+
+      const blockers = getOpeningSpansForEdge(floor.entities, hostRectId, edge, snapshot.id);
+      if (handle === "start") {
+        for (const block of blockers) {
+          if (block.end <= fixedAxis && block.start < fixedAxis) {
+            minDragged = Math.max(minDragged, block.end);
+          }
+        }
+      } else {
+        for (const block of blockers) {
+          if (block.start >= fixedAxis && block.end > fixedAxis) {
+            maxDragged = Math.min(maxDragged, block.start);
+          }
+        }
+      }
+
       const draggedAxis =
         minDragged <= maxDragged ? clampValue(rawDragged, minDragged, maxDragged) : rawDragged;
       const nextLength = Math.max(1, Math.round(Math.abs(draggedAxis - fixedAxis)));
@@ -1781,6 +2212,21 @@ export function Workspace() {
         y: nextY,
         width: nextLength,
       };
+
+      const resolvedPosition = resolveOpeningPositionWithoutOverlap(
+        updated,
+        { x: updated.x, y: updated.y },
+        floor.entities,
+        rectangleEntities,
+        updated.id,
+      );
+      if (!resolvedPosition) {
+        return;
+      }
+
+      updated.x = resolvedPosition.x;
+      updated.y = resolvedPosition.y;
+
       dispatch({ type: "UPSERT_ENTITY", entity: updated });
       dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: updated.id } });
       dispatch({ type: "SET_PREVIEW_ENTITY", entity: updated });
@@ -1809,7 +2255,8 @@ export function Workspace() {
     if (interaction.type === "draw-rect" && interaction.entitySnapshot) {
       const dx = event.clientX - interaction.startScreen.x;
       const dy = event.clientY - interaction.startScreen.y;
-      const hasMoved = interaction.dragStarted || Math.hypot(dx, dy) > 8;
+      const hasMoved =
+        interaction.dragStarted || Math.hypot(dx, dy) > getDragThresholdPx(interaction.pointerType);
 
       if (!hasMoved) {
         return;
@@ -1875,10 +2322,19 @@ export function Workspace() {
     const interaction = interactionRef.current;
 
     if (
+      interaction.type === "pan" &&
+      interaction.tapAction === "deselect-empty" &&
+      !interaction.dragStarted
+    ) {
+      dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
+    }
+
+    if (
       interaction.type === "drag-entity" &&
       interaction.tapAction === "flip-door" &&
       interaction.targetId &&
       interaction.entitySnapshot?.type === "door" &&
+      !isSlidingDoor(interaction.entitySnapshot) &&
       !interaction.dragStarted
     ) {
       const entity = interaction.entitySnapshot;
@@ -1895,23 +2351,43 @@ export function Workspace() {
       dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: updated.id } });
       dispatch({ type: "CLEAR_PREVIEW_ENTITY" });
     } else if (interaction.type === "drag-entity" && interaction.targetId && interaction.entitySnapshot) {
+      if (!interaction.dragStarted) {
+        dispatch({ type: "CLEAR_PREVIEW_ENTITY" });
+      } else {
       const snapshot = interaction.entitySnapshot;
       const referenceWorld = interaction.latestWorld ?? getEventWorld(event);
       const dx = referenceWorld.x - interaction.startWorld.x;
       const dy = referenceWorld.y - interaction.startWorld.y;
 
       if (snapshot.type === "door") {
-        const next = lockWindowPointToHostEdge(
-          {
-            x: snapshot.x + dx,
-            y: snapshot.y + dy,
-          },
-          snapshot,
-          rectangleEntities,
-        );
+        const locked = isSlidingDoor(snapshot)
+          ? lockWindowCenterToHostEdge(
+              {
+                x: snapshot.x + dx,
+                y: snapshot.y + dy,
+              },
+              snapshot,
+              rectangleEntities,
+            )
+          : lockWindowPointToHostEdge(
+              {
+                x: snapshot.x + dx,
+                y: snapshot.y + dy,
+              },
+              snapshot,
+              rectangleEntities,
+            );
+        const next =
+          resolveOpeningPositionWithoutOverlap(
+            snapshot,
+            locked,
+            floor.entities,
+            rectangleEntities,
+            snapshot.id,
+          ) ?? { x: snapshot.x, y: snapshot.y };
         dispatch({ type: "MOVE_ENTITY", entityId: interaction.targetId, x: next.x, y: next.y });
       } else if (snapshot.type === "window") {
-        const next = lockWindowCenterToHostEdge(
+        const locked = lockWindowCenterToHostEdge(
           {
             x: snapshot.x + dx,
             y: snapshot.y + dy,
@@ -1919,6 +2395,14 @@ export function Workspace() {
           snapshot,
           rectangleEntities,
         );
+        const next =
+          resolveOpeningPositionWithoutOverlap(
+            snapshot,
+            locked,
+            floor.entities,
+            rectangleEntities,
+            snapshot.id,
+          ) ?? { x: snapshot.x, y: snapshot.y };
         dispatch({ type: "MOVE_ENTITY", entityId: interaction.targetId, x: next.x, y: next.y });
       } else {
         const snapped = snapPointToGrid({
@@ -1934,6 +2418,7 @@ export function Workspace() {
       }
 
       dispatch({ type: "CLEAR_PREVIEW_ENTITY" });
+      }
     }
 
     if (interaction.type === "draw-rect" && interaction.entitySnapshot) {
@@ -1957,8 +2442,6 @@ export function Workspace() {
           dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: interaction.entitySnapshot.id } });
         } else if (interaction.sourceRectangleId) {
           dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: interaction.sourceRectangleId } });
-        } else {
-          openCreateRectangleModal(interaction.startWorld);
         }
       }
     }
@@ -2014,6 +2497,10 @@ export function Workspace() {
       event.preventDefault();
     }
 
+    if (registerTouchPointer(event)) {
+      return;
+    }
+
     if (isUtilityEntityType(entity.type) && event.button === 2) {
       event.preventDefault();
       dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: entity.id } });
@@ -2037,7 +2524,7 @@ export function Workspace() {
       if (entity.type === "text") {
         dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: entity.id } });
 
-        if (event.pointerType === "touch") {
+        if (canStartLongPress(event.pointerType, event.button)) {
           clearLongPress();
           longPressRef.current.pointerId = event.pointerId;
           longPressRef.current.entityId = entity.id;
@@ -2053,6 +2540,7 @@ export function Workspace() {
         interactionRef.current = {
           type: "drag-entity",
           pointerId: event.pointerId,
+          pointerType: event.pointerType,
           startScreen: { x: event.clientX, y: event.clientY },
           startWorld: world,
           targetId: entity.id,
@@ -2081,16 +2569,38 @@ export function Workspace() {
     }
 
     if (state.activeTool === "rectangle") {
+      if (entity.type === "rectangle" && event.button === 2) {
+        event.preventDefault();
+        openEditRectangleModal(entity);
+        return;
+      }
+
       const isSelectedRectangle =
         entity.type === "rectangle" &&
         state.selection.kind === "entity" &&
         state.selection.id === entity.id;
 
       if (isSelectedRectangle) {
+        if (canStartLongPress(event.pointerType, event.button)) {
+          clearLongPress();
+          longPressRef.current.pointerId = event.pointerId;
+          longPressRef.current.entityId = entity.id;
+          longPressRef.current.startScreen = { x: event.clientX, y: event.clientY };
+          longPressRef.current.fired = false;
+          longPressRef.current.timer = setTimeout(() => {
+            longPressRef.current.fired = true;
+            setDraftEntity(null);
+            dispatch({ type: "CLEAR_PREVIEW_ENTITY" });
+            finishInteraction();
+            openEditRectangleModal(entity);
+          }, 520);
+        }
+
         const world = getEventWorld(event);
         interactionRef.current = {
           type: "drag-entity",
           pointerId: event.pointerId,
+          pointerType: event.pointerType,
           startScreen: { x: event.clientX, y: event.clientY },
           startWorld: world,
           targetId: entity.id,
@@ -2100,18 +2610,12 @@ export function Workspace() {
         return;
       }
 
-      if (entity.type === "rectangle" && event.button === 2) {
-        event.preventDefault();
-        openEditRectangleModal(entity);
-        return;
-      }
-
       const world = getEventWorld(event);
       const nextEntity = createEntityFromTool("rectangle", Math.round(world.x), Math.round(world.y));
       nextEntity.width = 1;
       nextEntity.height = 1;
 
-      if (entity.type === "rectangle" && event.pointerType === "touch") {
+      if (entity.type === "rectangle" && canStartLongPress(event.pointerType, event.button)) {
         clearLongPress();
         longPressRef.current.pointerId = event.pointerId;
         longPressRef.current.entityId = entity.id;
@@ -2129,6 +2633,7 @@ export function Workspace() {
       interactionRef.current = {
         type: "draw-rect",
         pointerId: event.pointerId,
+        pointerType: event.pointerType,
         startScreen: { x: event.clientX, y: event.clientY },
         startWorld: { x: Math.round(world.x), y: Math.round(world.y) },
         entitySnapshot: nextEntity,
@@ -2144,17 +2649,24 @@ export function Workspace() {
       if (entity.type === "door") {
         const isSelected = state.selection.kind === "entity" && state.selection.id === entity.id;
         if (isSelected) {
+          const canFlipWithTap = !isSlidingDoor(entity);
           interactionRef.current = {
             type: "drag-entity",
             pointerId: event.pointerId,
+            pointerType: event.pointerType,
             startScreen: { x: event.clientX, y: event.clientY },
             startWorld: world,
             targetId: entity.id,
             entitySnapshot: entity,
-            tapAction: "flip-door",
+            tapAction: canFlipWithTap ? "flip-door" : undefined,
             dragStarted: false,
           };
           svgRef.current?.setPointerCapture(event.pointerId);
+          return;
+        }
+
+        if (isSlidingDoor(entity)) {
+          dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: entity.id } });
           return;
         }
 
@@ -2172,7 +2684,7 @@ export function Workspace() {
         return;
       }
 
-      const placed = tryPlaceDoorOrWindow("door", world);
+      const placed = tryPlaceDoorOrWindow("door", world, getDefaultDoorKind());
       if (!placed) {
         return;
       }
@@ -2185,7 +2697,7 @@ export function Workspace() {
       const world = getEventWorld(event);
       if (entity.type === "window") {
         dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: entity.id } });
-        if (event.pointerType === "touch") {
+        if (canStartLongPress(event.pointerType, event.button)) {
           clearLongPress();
           longPressRef.current.pointerId = event.pointerId;
           longPressRef.current.entityId = entity.id;
@@ -2201,6 +2713,7 @@ export function Workspace() {
         interactionRef.current = {
           type: "drag-entity",
           pointerId: event.pointerId,
+          pointerType: event.pointerType,
           startScreen: { x: event.clientX, y: event.clientY },
           startWorld: world,
           targetId: entity.id,
@@ -2226,6 +2739,7 @@ export function Workspace() {
         interactionRef.current = {
           type: "drag-entity",
           pointerId: event.pointerId,
+          pointerType: event.pointerType,
           startScreen: { x: event.clientX, y: event.clientY },
           startWorld: world,
           targetId: entity.id,
@@ -2239,6 +2753,7 @@ export function Workspace() {
       interactionRef.current = {
         type: "draw-rect",
         pointerId: event.pointerId,
+        pointerType: event.pointerType,
         startScreen: { x: event.clientX, y: event.clientY },
         startWorld: { x: Math.round(world.x), y: Math.round(world.y) },
         entitySnapshot: nextEntity,
@@ -2257,7 +2772,7 @@ export function Workspace() {
 
     dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: entity.id } });
 
-    if (entity.type === "rectangle" && event.pointerType === "touch") {
+    if (entity.type === "rectangle" && canStartLongPress(event.pointerType, event.button)) {
       clearLongPress();
       longPressRef.current.pointerId = event.pointerId;
       longPressRef.current.entityId = entity.id;
@@ -2272,7 +2787,7 @@ export function Workspace() {
       }, 520);
     }
 
-    if (entity.type === "window" && event.pointerType === "touch") {
+    if (entity.type === "window" && canStartLongPress(event.pointerType, event.button)) {
       clearLongPress();
       longPressRef.current.pointerId = event.pointerId;
       longPressRef.current.entityId = entity.id;
@@ -2285,7 +2800,7 @@ export function Workspace() {
       }, 520);
     }
 
-    if (entity.type === "door" && event.pointerType === "touch") {
+    if (entity.type === "door" && canStartLongPress(event.pointerType, event.button)) {
       clearLongPress();
       longPressRef.current.pointerId = event.pointerId;
       longPressRef.current.entityId = entity.id;
@@ -2298,7 +2813,7 @@ export function Workspace() {
       }, 520);
     }
 
-    if (isUtilityEntityType(entity.type) && event.pointerType === "touch") {
+    if (isUtilityEntityType(entity.type) && canStartLongPress(event.pointerType, event.button)) {
       clearLongPress();
       longPressRef.current.pointerId = event.pointerId;
       longPressRef.current.entityId = entity.id;
@@ -2313,7 +2828,7 @@ export function Workspace() {
 
     if (
       entity.type === "text" &&
-      event.pointerType === "touch" &&
+      canStartLongPress(event.pointerType, event.button) &&
       state.selection.kind === "entity" &&
       state.selection.id === entity.id
     ) {
@@ -2339,6 +2854,7 @@ export function Workspace() {
       interactionRef.current = {
         type: "drag-entity",
         pointerId: event.pointerId,
+        pointerType: event.pointerType,
         startScreen: { x: event.clientX, y: event.clientY },
         startWorld: world,
         targetId: entity.id,
@@ -2352,6 +2868,7 @@ export function Workspace() {
       interactionRef.current = {
         type: "drag-entity",
         pointerId: event.pointerId,
+        pointerType: event.pointerType,
         startScreen: { x: event.clientX, y: event.clientY },
         startWorld: world,
         targetId: entity.id,
@@ -2364,6 +2881,7 @@ export function Workspace() {
     interactionRef.current = {
       type: "drag-entity",
       pointerId: event.pointerId,
+      pointerType: event.pointerType,
       startScreen: { x: event.clientX, y: event.clientY },
       startWorld: world,
       targetId: entity.id,
@@ -2376,6 +2894,10 @@ export function Workspace() {
     event.stopPropagation();
     if (event.pointerType === "touch" || event.pointerType === "pen") {
       event.preventDefault();
+    }
+
+    if (registerTouchPointer(event)) {
+      return;
     }
 
     if (state.activeTool === "text") {
@@ -2394,6 +2916,7 @@ export function Workspace() {
     interactionRef.current = {
       type: "drag-wall-point",
       pointerId: event.pointerId,
+      pointerType: event.pointerType,
       startScreen: { x: event.clientX, y: event.clientY },
       startWorld: world,
       targetId: point.id,
@@ -2406,6 +2929,10 @@ export function Workspace() {
     event.stopPropagation();
     if (event.pointerType === "touch" || event.pointerType === "pen") {
       event.preventDefault();
+    }
+
+    if (registerTouchPointer(event)) {
+      return;
     }
 
     if (state.activeTool === "text") {
@@ -2441,10 +2968,19 @@ export function Workspace() {
     handle: ResizeHandle,
   ) => {
     event.stopPropagation();
+    if (event.pointerType === "touch" || event.pointerType === "pen") {
+      event.preventDefault();
+    }
+
+    if (registerTouchPointer(event)) {
+      return;
+    }
+
     dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: entity.id } });
     interactionRef.current = {
       type: "resize-rect",
       pointerId: event.pointerId,
+      pointerType: event.pointerType,
       startScreen: { x: event.clientX, y: event.clientY },
       startWorld: getEventWorld(event),
       targetId: entity.id,
@@ -2460,6 +2996,14 @@ export function Workspace() {
     handleHint: "start" | "end",
   ) => {
     event.stopPropagation();
+    if (event.pointerType === "touch" || event.pointerType === "pen") {
+      event.preventDefault();
+    }
+
+    if (registerTouchPointer(event)) {
+      return;
+    }
+
     const startWorld = getEventWorld(event);
     const edge = (entity.metadata.edge as RectEdge | undefined) ?? "top";
     const horizontalEdge = edge === "top" || edge === "bottom";
@@ -2471,6 +3015,7 @@ export function Workspace() {
     interactionRef.current = {
       type: "resize-window",
       pointerId: event.pointerId,
+      pointerType: event.pointerType,
       startScreen: { x: event.clientX, y: event.clientY },
       startWorld,
       targetId: entity.id,
@@ -2482,10 +3027,19 @@ export function Workspace() {
 
   const startSkylightResize = (event: ReactPointerEvent<SVGElement>, entity: MapEntity, handle: ResizeHandle) => {
     event.stopPropagation();
+    if (event.pointerType === "touch" || event.pointerType === "pen") {
+      event.preventDefault();
+    }
+
+    if (registerTouchPointer(event)) {
+      return;
+    }
+
     dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: entity.id } });
     interactionRef.current = {
       type: "resize-rect",
       pointerId: event.pointerId,
+      pointerType: event.pointerType,
       startScreen: { x: event.clientX, y: event.clientY },
       startWorld: getEventWorld(event),
       targetId: entity.id,
@@ -2518,6 +3072,9 @@ export function Workspace() {
 
   const renderedNonTextEntities = previewAdjustedEntities.filter((entity) => entity.type !== "text");
   const renderedTextEntities = previewAdjustedEntities.filter((entity) => entity.type === "text");
+  const hideLinearMarkers =
+    interactionRef.current.type === "draw-rect" ||
+    (interactionRef.current.type === "resize-rect" && interactionRef.current.entitySnapshot?.type === "rectangle");
 
   return (
     <div className="workspace-wrap">
@@ -2543,7 +3100,15 @@ export function Workspace() {
           </pattern>
         </defs>
 
-        <rect x="0" y="0" width="100%" height="100%" fill="#b7cec5" />
+        <defs>
+          <linearGradient id="workspace-bg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stopColor="#6baef6" />
+            <stop offset="55%" stopColor="#4f93e7" />
+            <stop offset="100%" stopColor="#3a7fd5" />
+          </linearGradient>
+        </defs>
+
+        <rect x="0" y="0" width="100%" height="100%" fill="url(#workspace-bg)" />
 
         <g transform={`translate(${state.camera.x}, ${state.camera.y}) scale(${state.camera.zoom})`}>
           {verticalGridLines.map((x) => (
@@ -2553,11 +3118,11 @@ export function Workspace() {
               y1={worldViewport.minY}
               x2={x}
               y2={worldViewport.maxY}
-              stroke="#7d9d95"
+              stroke="#a8c8ee"
               strokeWidth={x % 5 === 0 ? 1 : 1}
               vectorEffect="non-scaling-stroke"
               shapeRendering="crispEdges"
-              opacity={0.64}
+              opacity={x % 5 === 0 ? 0.38 : 0.24}
             />
           ))}
           {horizontalGridLines.map((y) => (
@@ -2567,13 +3132,18 @@ export function Workspace() {
               y1={y}
               x2={worldViewport.maxX}
               y2={y}
-              stroke="#7d9d95"
+              stroke="#a8c8ee"
               strokeWidth={y % 5 === 0 ? 1 : 1}
               vectorEffect="non-scaling-stroke"
               shapeRendering="crispEdges"
-              opacity={0.64}
+              opacity={y % 5 === 0 ? 0.38 : 0.24}
             />
           ))}
+
+          {!hideLinearMarkers &&
+            rectangleGuideGroups.map((group, index) => (
+              <PerimeterGuides key={`rg-perimeter-${index}`} guides={group.guides} />
+            ))}
 
           {floor.wallSegments.map((segment) => {
             const start = pointById.get(segment.startPointId);
@@ -2622,16 +3192,24 @@ export function Workspace() {
           {floor.wallPoints.map((point) => {
             const selected = state.selection.kind === "wallPoint" && state.selection.id === point.id;
             return (
-              <circle
-                key={point.id}
-                cx={point.x}
-                cy={point.y}
-                r={selected ? 0.28 : 0.2}
-                fill={selected ? "#ffe59a" : "#d9f6ff"}
-                stroke="#2f4f4f"
-                strokeWidth={0.05}
-                onPointerDown={(event) => handleWallPointDown(event, point)}
-              />
+              <g key={point.id}>
+                <circle
+                  cx={point.x}
+                  cy={point.y}
+                  r={0.48}
+                  fill="transparent"
+                  onPointerDown={(event) => handleWallPointDown(event, point)}
+                />
+                <circle
+                  cx={point.x}
+                  cy={point.y}
+                  r={selected ? 0.28 : 0.2}
+                  fill={selected ? "#ffe59a" : "#d9f6ff"}
+                  stroke="#2f4f4f"
+                  strokeWidth={0.05}
+                  pointerEvents="none"
+                />
+              </g>
             );
           })}
 
@@ -2670,24 +3248,115 @@ export function Workspace() {
                 ) : entity.type === "door" ? (
                   <g>
                     {(() => {
-                      const doorRadius = Math.max(1, entity.width);
+                      const doorVisualWidth = Math.max(1, getDoorVisualWidth(entity));
+                      const doorKind = getDoorKind(entity);
                       const flipSign = Boolean(entity.metadata.flipped) ? -1 : 1;
                       const mirrorSign = Boolean(entity.metadata.mirrored) ? -1 : 1;
                       const edge = (entity.metadata.edge as RectEdge | undefined) ?? "top";
-                      const wedgePath = `M ${-doorRadius / 2} 0 L ${doorRadius / 2} 0 A ${doorRadius} ${doorRadius} 0 0 1 ${-doorRadius / 2} ${doorRadius} Z`;
-                      const labelX = mirrorSign * -0.14 * doorRadius;
-                      const labelY = flipSign * 0.43 * doorRadius;
-                      const desiredGlobalLabelRotation =
-                        edge === "left" ? -90 : edge === "right" ? 90 : 0;
-                      const labelLocalRotation = desiredGlobalLabelRotation - entity.rotation;
+                      const wedgePath = `M ${-doorVisualWidth / 2} 0 L ${doorVisualWidth / 2} 0 A ${doorVisualWidth} ${doorVisualWidth} 0 0 1 ${-doorVisualWidth / 2} ${doorVisualWidth} Z`;
+                      const labelY = flipSign === 1 ? -WINDOW_LABEL_OFFSET : WINDOW_LABEL_OFFSET;
+                      const labelTransform = edge === "bottom" ? `rotate(180 0 ${labelY})` : undefined;
+                      const halfLeaf = doorVisualWidth / 2;
+                      const leftLeafPath = `M ${-doorVisualWidth / 2} 0 L 0 0 A ${halfLeaf} ${halfLeaf} 0 0 1 ${-doorVisualWidth / 2} ${halfLeaf} Z`;
+                      const rightLeafPath = `M ${doorVisualWidth / 2} 0 L 0 0 A ${halfLeaf} ${halfLeaf} 0 0 0 ${doorVisualWidth / 2} ${halfLeaf} Z`;
+
+                      if (doorKind === "sliding") {
+                        return (
+                          <>
+                            {selected && (
+                              <rect
+                                x={-doorVisualWidth / 2 - WINDOW_SELECTION_PADDING}
+                                y={-WINDOW_FILL_THICKNESS / 2 - WINDOW_SELECTION_PADDING}
+                                width={doorVisualWidth + WINDOW_SELECTION_PADDING * 2}
+                                height={WINDOW_FILL_THICKNESS + WINDOW_SELECTION_PADDING * 2}
+                                fill="transparent"
+                                stroke="#ffe59a"
+                                strokeWidth={0.2}
+                                rx={0.14}
+                              />
+                            )}
+                            <rect
+                              x={-doorVisualWidth / 2}
+                              y={-WINDOW_FILL_THICKNESS / 2}
+                              width={doorVisualWidth}
+                              height={WINDOW_FILL_THICKNESS}
+                              fill={OPENING_ACCENT_COLOR}
+                              stroke="#ffffff"
+                              strokeWidth={0.22}
+                            />
+                            <line
+                              x1={0}
+                              y1={-WINDOW_FILL_THICKNESS / 2}
+                              x2={0}
+                              y2={WINDOW_FILL_THICKNESS / 2}
+                              stroke="#ffffff"
+                              strokeWidth={0.14}
+                            />
+                            {selected && (
+                              <>
+                                <rect
+                                  x={-doorVisualWidth / 2 - WINDOW_ANCHOR_WIDTH / 2 - 0.22}
+                                  y={-WINDOW_ANCHOR_HEIGHT / 2 - 0.22}
+                                  width={WINDOW_ANCHOR_WIDTH + 0.44}
+                                  height={WINDOW_ANCHOR_HEIGHT + 0.44}
+                                  fill="transparent"
+                                  onPointerDown={(event) => startWindowResize(event, entity, "start")}
+                                />
+                                <rect
+                                  x={-doorVisualWidth / 2 - WINDOW_ANCHOR_WIDTH / 2}
+                                  y={-WINDOW_ANCHOR_HEIGHT / 2}
+                                  width={WINDOW_ANCHOR_WIDTH}
+                                  height={WINDOW_ANCHOR_HEIGHT}
+                                  rx={0.04}
+                                  fill="#ffffff"
+                                  stroke={OPENING_ACCENT_COLOR}
+                                  strokeWidth={0.06}
+                                  pointerEvents="none"
+                                />
+                                <rect
+                                  x={doorVisualWidth / 2 - WINDOW_ANCHOR_WIDTH / 2 - 0.22}
+                                  y={-WINDOW_ANCHOR_HEIGHT / 2 - 0.22}
+                                  width={WINDOW_ANCHOR_WIDTH + 0.44}
+                                  height={WINDOW_ANCHOR_HEIGHT + 0.44}
+                                  fill="transparent"
+                                  onPointerDown={(event) => startWindowResize(event, entity, "end")}
+                                />
+                                <rect
+                                  x={doorVisualWidth / 2 - WINDOW_ANCHOR_WIDTH / 2}
+                                  y={-WINDOW_ANCHOR_HEIGHT / 2}
+                                  width={WINDOW_ANCHOR_WIDTH}
+                                  height={WINDOW_ANCHOR_HEIGHT}
+                                  rx={0.04}
+                                  fill="#ffffff"
+                                  stroke={OPENING_ACCENT_COLOR}
+                                  strokeWidth={0.06}
+                                  pointerEvents="none"
+                                />
+                              </>
+                            )}
+                            <text
+                              x={0}
+                              y={labelY}
+                              textAnchor="middle"
+                              fill={DOOR_FILL_COLOR}
+                              fontSize={0.72}
+                              fontWeight={900}
+                              transform={labelTransform}
+                            >
+                              {`${Math.round(entity.width)} x ${Math.round(entity.height)}`}
+                            </text>
+                          </>
+                        );
+                      }
+
                       return (
                         <>
                           {selected && (
                             <rect
-                              x={-doorRadius / 2 - 0.2}
-                              y={(flipSign === 1 ? 0 : -doorRadius) - 0.2}
-                              width={doorRadius + 0.4}
-                              height={doorRadius + 0.4}
+                              x={-doorVisualWidth / 2 - 0.2}
+                              y={(flipSign === 1 ? 0 : -doorVisualWidth) - 0.2}
+                              width={doorVisualWidth + 0.4}
+                              height={doorVisualWidth + 0.4}
                               fill="transparent"
                               stroke="#ffe59a"
                               strokeWidth={0.2}
@@ -2695,34 +3364,69 @@ export function Workspace() {
                             />
                           )}
                           <g transform={`scale(${mirrorSign} ${flipSign})`}>
-                            <path d={wedgePath} fill="#a6a24a" fillOpacity={0.92} />
-                            <path d={wedgePath} fill="none" stroke="#ffffff" strokeWidth={0.22} />
-                            <line
-                              x1={-doorRadius / 2}
-                              y1={0}
-                              x2={-doorRadius / 2}
-                              y2={doorRadius}
-                              stroke="#ffffff"
-                              strokeWidth={0.22}
-                            />
-                            <line
-                              x1={-doorRadius / 2}
-                              y1={0}
-                              x2={doorRadius / 2}
-                              y2={0}
-                              stroke="#ffffff"
-                              strokeWidth={0.22}
-                            />
+                            {doorKind === "double" ? (
+                              <>
+                                <path d={leftLeafPath} fill={DOOR_FILL_COLOR} fillOpacity={0.92} />
+                                <path d={leftLeafPath} fill="none" stroke="#ffffff" strokeWidth={0.22} />
+                                <path d={rightLeafPath} fill={DOOR_FILL_COLOR} fillOpacity={0.92} />
+                                <path d={rightLeafPath} fill="none" stroke="#ffffff" strokeWidth={0.22} />
+                                <line
+                                  x1={-doorVisualWidth / 2}
+                                  y1={0}
+                                  x2={-doorVisualWidth / 2}
+                                  y2={halfLeaf}
+                                  stroke="#ffffff"
+                                  strokeWidth={0.22}
+                                />
+                                <line
+                                  x1={doorVisualWidth / 2}
+                                  y1={0}
+                                  x2={doorVisualWidth / 2}
+                                  y2={halfLeaf}
+                                  stroke="#ffffff"
+                                  strokeWidth={0.22}
+                                />
+                                <line x1={0} y1={0} x2={0} y2={halfLeaf} stroke="#ffffff" strokeWidth={0.14} />
+                                <line
+                                  x1={-doorVisualWidth / 2}
+                                  y1={0}
+                                  x2={doorVisualWidth / 2}
+                                  y2={0}
+                                  stroke="#ffffff"
+                                  strokeWidth={0.22}
+                                />
+                              </>
+                            ) : (
+                              <>
+                                <path d={wedgePath} fill={DOOR_FILL_COLOR} fillOpacity={0.92} />
+                                <path d={wedgePath} fill="none" stroke="#ffffff" strokeWidth={0.22} />
+                                <line
+                                  x1={-doorVisualWidth / 2}
+                                  y1={0}
+                                  x2={-doorVisualWidth / 2}
+                                  y2={doorVisualWidth}
+                                  stroke="#ffffff"
+                                  strokeWidth={0.22}
+                                />
+                                <line
+                                  x1={-doorVisualWidth / 2}
+                                  y1={0}
+                                  x2={doorVisualWidth / 2}
+                                  y2={0}
+                                  stroke="#ffffff"
+                                  strokeWidth={0.22}
+                                />
+                              </>
+                            )}
                           </g>
                           <text
-                            x={labelX}
+                            x={0}
                             y={labelY}
                             textAnchor="middle"
-                            fill="#ffffff"
-                            fontSize={0.68}
+                            fill={DOOR_FILL_COLOR}
+                            fontSize={0.72}
                             fontWeight={900}
-                            dominantBaseline="middle"
-                            transform={`rotate(${labelLocalRotation} ${labelX} ${labelY})`}
+                            transform={labelTransform}
                           >
                             {`${Math.round(entity.width)} x ${Math.round(entity.height)}`}
                           </text>
@@ -2749,12 +3453,20 @@ export function Workspace() {
                       y={-WINDOW_FILL_THICKNESS / 2}
                       width={entity.width}
                       height={WINDOW_FILL_THICKNESS}
-                      fill="#0f87a2"
+                      fill={OPENING_ACCENT_COLOR}
                       stroke="#ffffff"
                       strokeWidth={0.22}
                     />
                     {selected && (
                       <>
+                        <rect
+                          x={-entity.width / 2 - WINDOW_ANCHOR_WIDTH / 2 - 0.22}
+                          y={-WINDOW_ANCHOR_HEIGHT / 2 - 0.22}
+                          width={WINDOW_ANCHOR_WIDTH + 0.44}
+                          height={WINDOW_ANCHOR_HEIGHT + 0.44}
+                          fill="transparent"
+                          onPointerDown={(event) => startWindowResize(event, entity, "start")}
+                        />
                         <rect
                           x={-entity.width / 2 - WINDOW_ANCHOR_WIDTH / 2}
                           y={-WINDOW_ANCHOR_HEIGHT / 2}
@@ -2762,15 +3474,24 @@ export function Workspace() {
                           height={WINDOW_ANCHOR_HEIGHT}
                           rx={0.04}
                           fill="#ffffff"
-                          stroke="#0f87a2"
+                          stroke={OPENING_ACCENT_COLOR}
                           strokeWidth={0.06}
                           onPointerDown={(event) => startWindowResize(event, entity, "start")}
                           style={{
                             cursor:
-                              selectedWindowEdge === "left" || selectedWindowEdge === "right"
+                              selectedOpeningEdge === "left" || selectedOpeningEdge === "right"
                                 ? "ns-resize"
                                 : "ew-resize",
                           }}
+                          pointerEvents="none"
+                        />
+                        <rect
+                          x={entity.width / 2 - WINDOW_ANCHOR_WIDTH / 2 - 0.22}
+                          y={-WINDOW_ANCHOR_HEIGHT / 2 - 0.22}
+                          width={WINDOW_ANCHOR_WIDTH + 0.44}
+                          height={WINDOW_ANCHOR_HEIGHT + 0.44}
+                          fill="transparent"
+                          onPointerDown={(event) => startWindowResize(event, entity, "end")}
                         />
                         <rect
                           x={entity.width / 2 - WINDOW_ANCHOR_WIDTH / 2}
@@ -2779,15 +3500,16 @@ export function Workspace() {
                           height={WINDOW_ANCHOR_HEIGHT}
                           rx={0.04}
                           fill="#ffffff"
-                          stroke="#0f87a2"
+                          stroke={OPENING_ACCENT_COLOR}
                           strokeWidth={0.06}
                           onPointerDown={(event) => startWindowResize(event, entity, "end")}
                           style={{
                             cursor:
-                              selectedWindowEdge === "left" || selectedWindowEdge === "right"
+                              selectedOpeningEdge === "left" || selectedOpeningEdge === "right"
                                 ? "ns-resize"
                                 : "ew-resize",
                           }}
+                          pointerEvents="none"
                         />
                       </>
                     )}
@@ -2820,7 +3542,7 @@ export function Workspace() {
                       y={-entity.height / 2 + 0.25}
                       width={Math.max(0.2, entity.width - 0.5)}
                       height={Math.max(0.2, entity.height - 0.5)}
-                      fill="#0f87a2"
+                      fill={OPENING_ACCENT_COLOR}
                     />
                   </g>
                 ) : isUtilityEntityType(entity.type) ? (
@@ -2867,7 +3589,7 @@ export function Workspace() {
                       width={Math.max(entity.width, 0.4)}
                       height={Math.max(entity.height, 0.4)}
                       rx={0.1}
-                      fill={getRectangleFillColor(entity.metadata.color ?? "White")}
+                      fill={getRectangleFillColor(entity.metadata.color ?? "Blue")}
                       stroke={selected ? "#ffe59a" : "#ffffff"}
                       strokeWidth={selected ? 0.28 : 0.22}
                       shapeRendering="crispEdges"
@@ -2916,7 +3638,7 @@ export function Workspace() {
                     x={0}
                     y={-WINDOW_LABEL_OFFSET}
                     textAnchor="middle"
-                    fill="#0f87a2"
+                    fill={OPENING_ACCENT_COLOR}
                     fontSize={0.72}
                     fontWeight={900}
                     transform={
@@ -2931,9 +3653,10 @@ export function Workspace() {
 
                 {entity.type === "skylight" && (
                   <text
-                    x={entity.width / 2 + 0.55}
-                    y={0.22}
-                    fill="#0f87a2"
+                    x={0}
+                    y={entity.height / 2 + 0.88}
+                    textAnchor="middle"
+                    fill={OPENING_ACCENT_COLOR}
                     fontSize={0.72}
                     fontWeight={900}
                   >
@@ -2943,10 +3666,6 @@ export function Workspace() {
               </g>
             );
           })}
-
-          {rectangleGuideGroups.map((group, index) => (
-            <PerimeterGuides key={`rg-perimeter-${index}`} guides={group.guides} />
-          ))}
 
           {draftEntity && (
             <g transform={`translate(${draftEntity.x} ${draftEntity.y})`}>
@@ -2975,7 +3694,7 @@ export function Workspace() {
             </g>
           )}
 
-          {draftEntity?.type === "rectangle" && (
+          {!hideLinearMarkers && draftEntity?.type === "rectangle" && (
             <DraftRectangleGuides
               rect={{
                 x: draftEntity.x,
@@ -2985,6 +3704,23 @@ export function Workspace() {
               }}
             />
           )}
+
+          {draftEntity?.type === "rectangle" &&
+            interactionRef.current.type === "draw-rect" &&
+            interactionRef.current.dragStarted && (
+              <RectangleDragSizeCue
+                rect={{
+                  x: draftEntity.x,
+                  y: draftEntity.y,
+                  width: Math.abs(draftEntity.width),
+                  height: Math.abs(draftEntity.height),
+                }}
+              />
+            )}
+
+          {interactionRef.current.type === "resize-rect" &&
+            interactionRef.current.entitySnapshot?.type === "rectangle" &&
+            selectedRectangleEntity && <RectangleDragSizeCue rect={rectBoundsFromEntity(selectedRectangleEntity)} />}
 
           {selectedRectangleEntity && (() => {
             const rect = rectBoundsFromEntity(selectedRectangleEntity);
@@ -3050,17 +3786,25 @@ export function Workspace() {
                 <circle cx={x2} cy={midY} r={0.16} fill="#ffffff" stroke="#4f6862" strokeWidth={0.05} pointerEvents="none" />
 
                 {anchors.map((anchor) => (
-                  <circle
-                    key={`${anchor.handle}-${anchor.x}-${anchor.y}`}
-                    cx={anchor.x}
-                    cy={anchor.y}
-                    r={0.26}
-                    fill="#ffffff"
-                    stroke="#4f6862"
-                    strokeWidth={0.06}
-                    style={{ cursor: anchor.cursor }}
-                    onPointerDown={(event) => startRectangleResize(event, selectedRectangleEntity, anchor.handle)}
-                  />
+                  <g key={`${anchor.handle}-${anchor.x}-${anchor.y}`}>
+                    <circle
+                      cx={anchor.x}
+                      cy={anchor.y}
+                      r={0.58}
+                      fill="transparent"
+                      style={{ cursor: anchor.cursor }}
+                      onPointerDown={(event) => startRectangleResize(event, selectedRectangleEntity, anchor.handle)}
+                    />
+                    <circle
+                      cx={anchor.x}
+                      cy={anchor.y}
+                      r={0.26}
+                      fill="#ffffff"
+                      stroke="#4f6862"
+                      strokeWidth={0.06}
+                      pointerEvents="none"
+                    />
+                  </g>
                 ))}
               </g>
             );
@@ -3129,17 +3873,25 @@ export function Workspace() {
                 <circle cx={x2} cy={midY} r={0.16} fill="#ffffff" stroke="#4f6862" strokeWidth={0.05} pointerEvents="none" />
 
                 {anchors.map((anchor) => (
-                  <circle
-                    key={`sk-${anchor.handle}-${anchor.x}-${anchor.y}`}
-                    cx={anchor.x}
-                    cy={anchor.y}
-                    r={0.26}
-                    fill="#ffffff"
-                    stroke="#4f6862"
-                    strokeWidth={0.06}
-                    style={{ cursor: anchor.cursor }}
-                    onPointerDown={(event) => startSkylightResize(event, selectedSkylightEntity, anchor.handle)}
-                  />
+                  <g key={`sk-${anchor.handle}-${anchor.x}-${anchor.y}`}>
+                    <circle
+                      cx={anchor.x}
+                      cy={anchor.y}
+                      r={0.58}
+                      fill="transparent"
+                      style={{ cursor: anchor.cursor }}
+                      onPointerDown={(event) => startSkylightResize(event, selectedSkylightEntity, anchor.handle)}
+                    />
+                    <circle
+                      cx={anchor.x}
+                      cy={anchor.y}
+                      r={0.26}
+                      fill="#ffffff"
+                      stroke="#4f6862"
+                      strokeWidth={0.06}
+                      pointerEvents="none"
+                    />
+                  </g>
                 ))}
               </g>
             );
@@ -3315,6 +4067,8 @@ export function Workspace() {
 
       <DoorModal
         isOpen={doorModalState !== null}
+        title={doorModalState?.kind === "double" ? "DOUBLE DOOR" : "DOOR"}
+        initialWidthFt={doorModalState?.initialWidthFt ?? SINGLE_DOOR_DEFAULT_WIDTH}
         initialHeightFt={doorModalState?.initialHeightFt ?? 7}
         initialMirrored={doorModalState?.initialMirrored ?? false}
         onCancel={() => setDoorModalState(null)}
@@ -3331,15 +4085,73 @@ export function Workspace() {
 
           const updated: MapEntity = {
             ...existing,
+            width: Math.max(1, Math.round(payload.widthFt)),
             height: Math.max(1, Math.round(payload.heightFt)),
             metadata: {
               ...existing.metadata,
               mirrored: payload.mirrored,
             },
           };
+
+          const resolvedPosition = resolveOpeningPositionWithoutOverlap(
+            updated,
+            { x: updated.x, y: updated.y },
+            floor.entities,
+            rectangleEntities,
+            updated.id,
+          );
+          if (!resolvedPosition) {
+            return;
+          }
+
+          updated.x = resolvedPosition.x;
+          updated.y = resolvedPosition.y;
+
           dispatch({ type: "UPSERT_ENTITY", entity: updated });
           dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: updated.id } });
           setDoorModalState(null);
+        }}
+      />
+
+      <SlidingGlassDoorModal
+        isOpen={slidingDoorModalState !== null}
+        initialWidthFt={slidingDoorModalState?.initialWidthFt ?? SLIDING_DOOR_DEFAULT_WIDTH}
+        initialHeightFt={slidingDoorModalState?.initialHeightFt ?? SLIDING_DOOR_DEFAULT_HEIGHT}
+        onCancel={() => setSlidingDoorModalState(null)}
+        onSubmit={(payload: SlidingGlassDoorModalSubmit) => {
+          if (!slidingDoorModalState) {
+            return;
+          }
+
+          const existing = floor.entities.find((entity) => entity.id === slidingDoorModalState.entityId);
+          if (!existing || !isSlidingDoor(existing)) {
+            setSlidingDoorModalState(null);
+            return;
+          }
+
+          const updated: MapEntity = {
+            ...existing,
+            width: Math.max(1, Math.round(payload.widthFt)),
+            height: Math.max(1, Math.round(payload.heightFt)),
+          };
+
+          const resolvedPosition = resolveOpeningPositionWithoutOverlap(
+            updated,
+            { x: updated.x, y: updated.y },
+            floor.entities,
+            rectangleEntities,
+            updated.id,
+          );
+          if (!resolvedPosition) {
+            return;
+          }
+
+          updated.x = resolvedPosition.x;
+          updated.y = resolvedPosition.y;
+
+          dispatch({ type: "UPSERT_ENTITY", entity: updated });
+          dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: updated.id } });
+          setSlidingDoorModalState(null);
         }}
       />
 
@@ -3364,6 +4176,21 @@ export function Workspace() {
             width: Math.max(1, Math.round(payload.widthFt)),
             height: Math.max(1, Math.round(payload.heightFt)),
           };
+
+          const resolvedPosition = resolveOpeningPositionWithoutOverlap(
+            updated,
+            { x: updated.x, y: updated.y },
+            floor.entities,
+            rectangleEntities,
+            updated.id,
+          );
+          if (!resolvedPosition) {
+            return;
+          }
+
+          updated.x = resolvedPosition.x;
+          updated.y = resolvedPosition.y;
+
           dispatch({ type: "UPSERT_ENTITY", entity: updated });
           dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: updated.id } });
           setWindowModalState(null);

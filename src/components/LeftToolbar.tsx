@@ -5,18 +5,33 @@ import { useEditor } from "../state/EditorContext";
 import { createEntityFromTool } from "../state/editorReducer";
 import { TOOL_DEFINITIONS } from "../tools/toolDefinitions";
 import { getUtilityIconByToolId, isUtilityToolId } from "../assets/utilityIcons";
+import doorToolIcon from "../../assets/building-icons/door.png";
+import doubleDoorToolIcon from "../../assets/building-icons/double-door.png";
+import slidingGlassToolIcon from "../../assets/building-icons/sliding-glass.png";
+import windowToolIcon from "../../assets/building-icons/window.png";
+import skylightToolIcon from "../../assets/building-icons/skylight.png";
 import { WindowModal } from "./WindowModal";
 import type { WindowModalSubmit } from "./WindowModal";
 import { UtilityLabelModal } from "./UtilityLabelModal";
 import type { UtilityLabelInitialValues, UtilityLabelSubmit } from "./UtilityLabelModal";
 import { screenToWorld, snapPointToGrid } from "../utils/geometry";
-import {
-  exportProjectAsJson,
-  importProjectFromJson,
-  loadProjectFromLocalStorage,
-  saveProjectToLocalStorage,
-} from "../utils/persistence";
 import type { ToolId } from "../types";
+
+type DoorToolType = "single" | "double" | "sliding";
+
+function getDoorToolTypeFromProjectMetadata(metadata: Record<string, string | number | boolean>): DoorToolType {
+  const value = String(metadata.doorDefaultType ?? "single").toLowerCase();
+  if (value === "double" || value === "sliding") {
+    return value;
+  }
+  return "single";
+}
+
+const DOOR_TOOL_OPTIONS: Array<{ id: DoorToolType; label: string }> = [
+  { id: "single", label: "DOOR" },
+  { id: "double", label: "DOUBLE" },
+  { id: "sliding", label: "SLIDING" },
+];
 
 function clampPositiveInt(value: number, fallback: number): number {
   const normalized = Number(value);
@@ -38,7 +53,15 @@ interface UtilityLabelModalState {
   initialValues: UtilityLabelInitialValues;
 }
 
-function ToolIcon({ toolId, fallback }: { toolId: ToolId; fallback: string }) {
+function ToolIcon({
+  toolId,
+  fallback,
+  doorType = "single",
+}: {
+  toolId: ToolId;
+  fallback: string;
+  doorType?: DoorToolType;
+}) {
   if (isUtilityToolId(toolId)) {
     return <img className="tool-icon-image" src={getUtilityIconByToolId(toolId)} alt="" aria-hidden="true" />;
   }
@@ -48,8 +71,8 @@ function ToolIcon({ toolId, fallback }: { toolId: ToolId; fallback: string }) {
       <svg className="tool-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
         <path
           d="M4 2 L4 20 L8.6 15.9 L11.6 22 L14.6 20.5 L11.5 14.6 L18 14.3 Z"
-          fill="#ffffff"
-          stroke="#ffffff"
+          fill="currentColor"
+          stroke="currentColor"
           strokeWidth="0.9"
           strokeLinejoin="round"
         />
@@ -60,37 +83,44 @@ function ToolIcon({ toolId, fallback }: { toolId: ToolId; fallback: string }) {
   if (toolId === "rectangle") {
     return (
       <svg className="tool-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
-        <rect x="3.2" y="6" width="17.6" height="12" fill="rgba(255,255,255,0.5)" stroke="#ffffff" strokeWidth="2.8" />
+        <rect x="3.2" y="6" width="17.6" height="12" fill="rgba(0,0,0,0.08)" stroke="currentColor" strokeWidth="2.4" />
       </svg>
     );
   }
 
   if (toolId === "door") {
+    const iconSource =
+      doorType === "double"
+        ? doubleDoorToolIcon
+        : doorType === "sliding"
+          ? slidingGlassToolIcon
+          : doorToolIcon;
     return (
-      <svg className="tool-icon-svg tool-icon-door" viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M8 18 A8 8 0 0 1 16 10 L16 18 Z" fill="#a6a24a" />
-        <path d="M8 18 A8 8 0 0 1 16 10" fill="none" stroke="#ffffff" strokeWidth="2.6" strokeLinecap="square" />
-        <line x1="16" y1="10" x2="16" y2="18" stroke="#ffffff" strokeWidth="2.6" strokeLinecap="square" />
-        <line x1="8" y1="18" x2="16" y2="18" stroke="#ffffff" strokeWidth="2.6" strokeLinecap="square" />
-      </svg>
+      <span
+        className="tool-icon-image tool-icon-building tool-icon-door tool-icon-building-mask"
+        style={{ "--building-icon": `url(${iconSource})` } as React.CSSProperties}
+        aria-hidden="true"
+      />
     );
   }
 
   if (toolId === "window") {
     return (
-      <svg className="tool-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
-        <rect x="4.4" y="9.4" width="15.2" height="5.2" fill="none" stroke="#ffffff" strokeWidth="2.8" />
-        <rect x="6.8" y="11" width="10.4" height="2" fill="#0f87a2" />
-      </svg>
+      <span
+        className="tool-icon-image tool-icon-building tool-icon-window tool-icon-building-mask"
+        style={{ "--building-icon": `url(${windowToolIcon})` } as React.CSSProperties}
+        aria-hidden="true"
+      />
     );
   }
 
   if (toolId === "skylight") {
     return (
-      <svg className="tool-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
-        <rect x="6.2" y="4.4" width="11.6" height="15.2" fill="none" stroke="#ffffff" strokeWidth="2.8" />
-        <rect x="8" y="6.2" width="8" height="11.6" fill="#0f87a2" />
-      </svg>
+      <span
+        className="tool-icon-image tool-icon-building tool-icon-skylight tool-icon-building-mask"
+        style={{ "--building-icon": `url(${skylightToolIcon})` } as React.CSSProperties}
+        aria-hidden="true"
+      />
     );
   }
 
@@ -105,25 +135,48 @@ function ToolGroup({
   title,
   ids,
   onWindowToolConfigRequest,
+  doorType,
+  onDoorTypeChange,
+  collapsed,
   onToolPressed,
 }: {
   title: string;
   ids: ToolId[];
   onWindowToolConfigRequest?: () => void;
+  doorType?: DoorToolType;
+  onDoorTypeChange?: (next: DoorToolType) => void;
+  collapsed?: boolean;
   onToolPressed?: (toolId: ToolId) => void;
 }) {
   const { state, dispatch } = useEditor();
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressPointerIdRef = useRef<number | null>(null);
   const longPressStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const longPressTargetToolRef = useRef<ToolId | null>(null);
   const longPressFiredRef = useRef(false);
+  const doorButtonRef = useRef<HTMLButtonElement | null>(null);
+  const [doorSelectorOpen, setDoorSelectorOpen] = useState(false);
+  const [doorSelectorAnchor, setDoorSelectorAnchor] = useState({ left: 0, top: 0, width: 0 });
 
-  const clearWindowToolLongPress = () => {
+  const clearToolLongPress = () => {
     if (longPressTimerRef.current) {
       clearTimeout(longPressTimerRef.current);
     }
     longPressTimerRef.current = null;
     longPressPointerIdRef.current = null;
+    longPressTargetToolRef.current = null;
+  };
+
+  const openDoorSelector = () => {
+    if (!doorButtonRef.current) {
+      return;
+    }
+    setDoorSelectorAnchor({
+      left: doorButtonRef.current.offsetLeft,
+      top: doorButtonRef.current.offsetTop + doorButtonRef.current.offsetHeight + 6,
+      width: doorButtonRef.current.offsetWidth,
+    });
+    setDoorSelectorOpen(true);
   };
 
   const orderedTools = ids
@@ -131,12 +184,13 @@ function ToolGroup({
     .filter((tool): tool is NonNullable<typeof tool> => Boolean(tool));
 
   return (
-    <div className="tool-group">
+    <div className="tool-group tool-group-with-overlay">
       <h3>{title}</h3>
       <div className="tool-grid">
         {orderedTools.map((tool) => (
           <button
             key={tool.id}
+            ref={tool.id === "door" ? doorButtonRef : undefined}
             type="button"
             className={`tool-btn ${state.activeTool === tool.id ? "active" : ""}`}
             draggable={false}
@@ -144,72 +198,124 @@ function ToolGroup({
               if (isUtilityToolId(tool.id)) {
                 return;
               }
-              if (tool.id === "window" && longPressFiredRef.current) {
+              if ((tool.id === "window" || tool.id === "door") && longPressFiredRef.current) {
                 longPressFiredRef.current = false;
                 return;
+              }
+              if (tool.id !== "door") {
+                setDoorSelectorOpen(false);
               }
               onToolPressed?.(tool.id);
               dispatch({ type: "SET_TOOL", tool: tool.id });
             }}
             onContextMenu={(event) => {
-              if (tool.id !== "window") {
-                return;
-              }
-              event.preventDefault();
-              onToolPressed?.("window");
-              dispatch({ type: "SET_TOOL", tool: "window" });
-              onWindowToolConfigRequest?.();
-            }}
-            onPointerDown={(event) => {
-              if (tool.id !== "window" || event.pointerType !== "touch") {
-                return;
-              }
-              clearWindowToolLongPress();
-              longPressFiredRef.current = false;
-              longPressPointerIdRef.current = event.pointerId;
-              longPressStartRef.current = { x: event.clientX, y: event.clientY };
-              longPressTimerRef.current = setTimeout(() => {
-                longPressFiredRef.current = true;
+              if (tool.id === "window") {
+                event.preventDefault();
                 onToolPressed?.("window");
                 dispatch({ type: "SET_TOOL", tool: "window" });
                 onWindowToolConfigRequest?.();
-                clearWindowToolLongPress();
+                return;
+              }
+              if (tool.id === "door") {
+                event.preventDefault();
+                onToolPressed?.("door");
+                dispatch({ type: "SET_TOOL", tool: "door" });
+                openDoorSelector();
+              }
+            }}
+            onPointerDown={(event) => {
+              if ((tool.id !== "window" && tool.id !== "door") || event.button !== 0) {
+                return;
+              }
+              clearToolLongPress();
+              longPressFiredRef.current = false;
+              longPressPointerIdRef.current = event.pointerId;
+              longPressTargetToolRef.current = tool.id;
+              longPressStartRef.current = { x: event.clientX, y: event.clientY };
+              longPressTimerRef.current = setTimeout(() => {
+                longPressFiredRef.current = true;
+                if (tool.id === "window") {
+                  onToolPressed?.("window");
+                  dispatch({ type: "SET_TOOL", tool: "window" });
+                  onWindowToolConfigRequest?.();
+                } else {
+                  onToolPressed?.("door");
+                  dispatch({ type: "SET_TOOL", tool: "door" });
+                  openDoorSelector();
+                }
+                clearToolLongPress();
               }, 520);
             }}
             onPointerMove={(event) => {
-              if (tool.id !== "window" || longPressPointerIdRef.current !== event.pointerId) {
+              if (
+                (tool.id !== "window" && tool.id !== "door") ||
+                longPressPointerIdRef.current !== event.pointerId ||
+                longPressTargetToolRef.current !== tool.id
+              ) {
                 return;
               }
               const dx = event.clientX - longPressStartRef.current.x;
               const dy = event.clientY - longPressStartRef.current.y;
               if (Math.hypot(dx, dy) > 8) {
-                clearWindowToolLongPress();
+                clearToolLongPress();
               }
             }}
             onPointerUp={(event) => {
-              if (tool.id !== "window" || longPressPointerIdRef.current !== event.pointerId) {
+              if (
+                (tool.id !== "window" && tool.id !== "door") ||
+                longPressPointerIdRef.current !== event.pointerId ||
+                longPressTargetToolRef.current !== tool.id
+              ) {
                 return;
               }
-              clearWindowToolLongPress();
+              clearToolLongPress();
             }}
             onPointerCancel={(event) => {
-              if (tool.id !== "window" || longPressPointerIdRef.current !== event.pointerId) {
+              if (
+                (tool.id !== "window" && tool.id !== "door") ||
+                longPressPointerIdRef.current !== event.pointerId ||
+                longPressTargetToolRef.current !== tool.id
+              ) {
                 return;
               }
-              clearWindowToolLongPress();
+              clearToolLongPress();
             }}
             onPointerLeave={() => {
-              if (tool.id !== "window") {
+              if (tool.id !== "window" && tool.id !== "door") {
                 return;
               }
-              clearWindowToolLongPress();
+              clearToolLongPress();
             }}
           >
-            <ToolIcon toolId={tool.id} fallback={tool.icon} />
+            <ToolIcon toolId={tool.id} fallback={tool.icon} doorType={tool.id === "door" ? doorType : undefined} />
             <span className="label">{tool.label}</span>
           </button>
         ))}
       </div>
+
+      {doorSelectorOpen && onDoorTypeChange && doorType && (
+        <div
+          className={`door-type-selector ${collapsed ? "is-collapsed" : ""}`}
+          style={{ left: `${doorSelectorAnchor.left}px`, top: `${doorSelectorAnchor.top}px`, minWidth: `${doorSelectorAnchor.width}px` }}
+        >
+          {DOOR_TOOL_OPTIONS.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              className={`door-type-option ${doorType === option.id ? "active" : ""}`}
+              onClick={() => {
+                onDoorTypeChange(option.id);
+                onToolPressed?.("door");
+                dispatch({ type: "SET_TOOL", tool: "door" });
+                setDoorSelectorOpen(false);
+              }}
+            >
+              <ToolIcon toolId="door" fallback="◖" doorType={option.id} />
+              {!collapsed && <span>{option.label}</span>}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -251,9 +357,15 @@ function UtilityStickerGroup({
   );
 }
 
-export function LeftToolbar() {
+interface LeftToolbarProps {
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+}
+
+export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
   const { state, dispatch } = useEditor();
   const metrics = calculateProjectMetrics(state.project, state.previewEntity);
+  const defaultDoorType = getDoorToolTypeFromProjectMetadata(state.project.metadata);
   const [windowToolModalOpen, setWindowToolModalOpen] = useState(false);
   const [utilityDrag, setUtilityDrag] = useState<UtilityDragState | null>(null);
   const [utilityLabelModalState, setUtilityLabelModalState] = useState<UtilityLabelModalState | null>(null);
@@ -416,12 +528,47 @@ export function LeftToolbar() {
     />
   );
 
+  const windowToolModal = (
+    <WindowModal
+      isOpen={windowToolModalOpen}
+      initialWidthFt={windowDefaultWidthFt}
+      initialHeightFt={windowDefaultHeightFt}
+      onCancel={() => setWindowToolModalOpen(false)}
+      onSubmit={(payload: WindowModalSubmit) => {
+        dispatch({
+          type: "SET_DEFAULT_WINDOW_SIZE",
+          widthFt: payload.widthFt,
+          heightFt: payload.heightFt,
+        });
+        setWindowToolModalOpen(false);
+      }}
+    />
+  );
+
   return (
-    <aside className="left-toolbar">
-      <ToolGroup title="TOOLS" ids={["select", "rectangle", "text"]} onToolPressed={maybeClearSelectionForTool} />
+    <aside className={`left-toolbar ${collapsed ? "collapsed" : ""}`}>
+      <button
+        type="button"
+        className="sidebar-collapse-btn"
+        aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        title={collapsed ? "Expand" : "Collapse"}
+        onClick={onToggleCollapse}
+      >
+        {collapsed ? ">" : "<"}
+      </button>
+
+      <ToolGroup
+        title="TOOLS"
+        ids={["select", "rectangle", "text"]}
+        collapsed={collapsed}
+        onToolPressed={maybeClearSelectionForTool}
+      />
       <ToolGroup
         title="BUILDING"
         ids={["door", "window", "skylight"]}
+        collapsed={collapsed}
+        doorType={defaultDoorType}
+        onDoorTypeChange={(next) => dispatch({ type: "SET_DEFAULT_DOOR_TYPE", doorType: next })}
         onWindowToolConfigRequest={() => setWindowToolModalOpen(true)}
         onToolPressed={maybeClearSelectionForTool}
       />
@@ -430,88 +577,35 @@ export function LeftToolbar() {
         onStartDrag={startUtilityDrag}
       />
 
-      <section className="details-panel">
-        <h3>DETAILS</h3>
-        <div className="stats-row">
-          <span>Total Ft²</span>
-          <strong>{metrics.conditionedAreaFt2.toFixed(0)}</strong>
-        </div>
-        <div className="stats-row">
-          <span>Avg Ceiling Height</span>
-          <strong>{metrics.averageCeilingHeightFt.toFixed(1)}</strong>
-        </div>
-        <div className="stats-row">
-          <span>Total Volume</span>
-          <strong>{metrics.volumeFt3.toFixed(0)}</strong>
-        </div>
-      </section>
+      {!collapsed && (
+        <section className="details-panel">
+          <h3>PROJECT DETAILS</h3>
+          <div className="stats-row">
+            <span>Total Ft²</span>
+            <strong>{metrics.conditionedAreaFt2.toFixed(0)}</strong>
+          </div>
+          <div className="stats-row">
+            <span>Avg Ceiling Height</span>
+            <strong>{metrics.averageCeilingHeightFt.toFixed(1)}</strong>
+          </div>
+          <div className="stats-row">
+            <span>Total Volume</span>
+            <strong>{metrics.volumeFt3.toFixed(0)}</strong>
+          </div>
+        </section>
+      )}
 
-      <section className="dev-controls">
-        <h3>SAVE/LOAD</h3>
-        <div className="dev-btns">
-          <button type="button" onClick={() => saveProjectToLocalStorage(state.project)}>
-            Save
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              const loaded = loadProjectFromLocalStorage();
-              if (loaded) {
-                dispatch({ type: "LOAD_PROJECT", project: loaded });
-              }
-            }}
-          >
-            Load
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              const json = exportProjectAsJson(state.project);
-              navigator.clipboard.writeText(json).catch(() => undefined);
-              window.alert("Project JSON copied to clipboard.");
-            }}
-          >
-            Export JSON
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              const input = window.prompt("Paste project JSON");
-              if (!input) {
-                return;
-              }
-              try {
-                const project = importProjectFromJson(input);
-                dispatch({ type: "LOAD_PROJECT", project });
-              } catch {
-                window.alert("Invalid JSON payload.");
-              }
-            }}
-          >
-            Import JSON
-          </button>
-        </div>
-      </section>
-
-      <button className="return-btn" type="button" onClick={() => window.history.back()}>
-        Return
+      <button
+        className="return-btn"
+        type="button"
+        onClick={() => window.history.back()}
+        title="Return"
+        aria-label="Return"
+      >
+        {collapsed ? "<-" : "Return To Job"}
       </button>
 
-      <WindowModal
-        isOpen={windowToolModalOpen}
-        initialWidthFt={windowDefaultWidthFt}
-        initialHeightFt={windowDefaultHeightFt}
-        onCancel={() => setWindowToolModalOpen(false)}
-        onSubmit={(payload: WindowModalSubmit) => {
-          dispatch({
-            type: "SET_DEFAULT_WINDOW_SIZE",
-            widthFt: payload.widthFt,
-            heightFt: payload.heightFt,
-          });
-          setWindowToolModalOpen(false);
-        }}
-      />
-
+      {typeof document !== "undefined" ? createPortal(windowToolModal, document.body) : windowToolModal}
       {typeof document !== "undefined" ? createPortal(utilityLabelModal, document.body) : utilityLabelModal}
 
       {utilityGhost && typeof document !== "undefined" ? createPortal(utilityGhost, document.body) : null}

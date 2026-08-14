@@ -84,7 +84,7 @@ export function FloorTabs({ onRequestCreate, onRequestEdit }: FloorTabsProps) {
             onRequestEdit(floor.id);
           }}
           onPointerDown={(event) => {
-            if (event.pointerType !== "touch") {
+            if (event.button !== 0) {
               return;
             }
             clearLongPress();

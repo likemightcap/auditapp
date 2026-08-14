@@ -1,4 +1,4 @@
-export type Orientation = "N" | "E" | "S" | "W";
+export type Orientation = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
 
 export type ToolId =
   | "select"
@@ -109,6 +109,7 @@ export type EditorAction =
   | { type: "SET_PROJECT_NAME"; projectName: string }
   | { type: "SET_ADDRESS"; address: string }
   | { type: "SET_DEFAULT_WINDOW_SIZE"; widthFt: number; heightFt: number }
+  | { type: "SET_DEFAULT_DOOR_TYPE"; doorType: "single" | "double" | "sliding" }
   | { type: "SET_AVG_CEILING"; value: number }
   | { type: "ADD_LEVEL"; floorName: string; unconditioned: boolean }
   | { type: "DELETE_LEVEL"; floorId: string }

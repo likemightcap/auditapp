@@ -23,19 +23,25 @@ interface RectangleModalProps {
   onSubmit: (payload: RectangleModalSubmit) => void;
 }
 
-const COLORS = ["WHITE", "BLUE", "RED", "YELLOW"] as const;
+const COLORS = ["BLUE", "GREEN", "RED", "YELLOW"] as const;
+
+function normalizeRectangleColor(value: string): string {
+  const normalized = String(value).toUpperCase();
+  return COLORS.includes(normalized as (typeof COLORS)[number]) ? normalized : "BLUE";
+}
 
 function colorCellStyles(color: string): CSSProperties {
   switch (color.toUpperCase()) {
     case "BLUE":
       return { background: "#2f8eff", color: "#ffffff" };
+    case "GREEN":
+      return { background: "#2ab56a", color: "#ffffff" };
     case "RED":
       return { background: "#d94a43", color: "#ffffff" };
     case "YELLOW":
       return { background: "#f2ca45", color: "#4c5452" };
-    case "WHITE":
     default:
-      return { background: "#ffffff", color: "#6f8680" };
+      return { background: "#2f8eff", color: "#ffffff" };
   }
 }
 
@@ -78,7 +84,7 @@ function StepperField({
 }
 
 export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: RectangleModalProps) {
-  const [color, setColor] = useState("WHITE");
+  const [color, setColor] = useState("BLUE");
   const [widthFt, setWidthFt] = useState(12);
   const [heightFt, setHeightFt] = useState(12);
   const [unconditioned, setUnconditioned] = useState(false);
@@ -91,7 +97,7 @@ export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: Re
     if (!isOpen) {
       return;
     }
-    setColor(initialValues.color.toUpperCase());
+    setColor(normalizeRectangleColor(initialValues.color));
     setWidthFt(clampToPositiveInt(initialValues.widthFt));
     setHeightFt(clampToPositiveInt(initialValues.heightFt));
     setUnconditioned(Boolean(initialValues.unconditioned));

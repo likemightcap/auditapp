@@ -1,19 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 
-export interface DoorModalSubmit {
+export interface SlidingGlassDoorModalSubmit {
   widthFt: number;
   heightFt: number;
-  mirrored: boolean;
 }
 
-interface DoorModalProps {
+interface SlidingGlassDoorModalProps {
   isOpen: boolean;
-  title?: string;
   initialWidthFt: number;
   initialHeightFt: number;
-  initialMirrored: boolean;
   onCancel: () => void;
-  onSubmit: (payload: DoorModalSubmit) => void;
+  onSubmit: (payload: SlidingGlassDoorModalSubmit) => void;
 }
 
 function clampToPositiveInt(value: number): number {
@@ -23,18 +20,15 @@ function clampToPositiveInt(value: number): number {
   return Math.max(1, Math.round(value));
 }
 
-export function DoorModal({
+export function SlidingGlassDoorModal({
   isOpen,
-  title = "DOOR",
   initialWidthFt,
   initialHeightFt,
-  initialMirrored,
   onCancel,
   onSubmit,
-}: DoorModalProps) {
-  const [widthFt, setWidthFt] = useState(3);
+}: SlidingGlassDoorModalProps) {
+  const [widthFt, setWidthFt] = useState(6);
   const [heightFt, setHeightFt] = useState(7);
-  const [mirrored, setMirrored] = useState(false);
 
   useEffect(() => {
     if (!isOpen) {
@@ -42,8 +36,7 @@ export function DoorModal({
     }
     setWidthFt(clampToPositiveInt(initialWidthFt));
     setHeightFt(clampToPositiveInt(initialHeightFt));
-    setMirrored(Boolean(initialMirrored));
-  }, [initialHeightFt, initialMirrored, initialWidthFt, isOpen]);
+  }, [initialHeightFt, initialWidthFt, isOpen]);
 
   const canSubmit = useMemo(() => widthFt >= 1 && heightFt >= 1, [heightFt, widthFt]);
 
@@ -54,7 +47,7 @@ export function DoorModal({
   return (
     <div className="modal-backdrop" onPointerDown={onCancel}>
       <section className="text-modal" onPointerDown={(event) => event.stopPropagation()}>
-        <h2>{title}</h2>
+        <h2>SLIDING GLASS DOOR</h2>
 
         <div className="modal-row">
           <label>WIDTH:</label>
@@ -96,23 +89,12 @@ export function DoorModal({
           </div>
         </div>
 
-        <div className="modal-row">
-          <label>MIRROR:</label>
-          <button
-            type="button"
-            className="modal-inline-button"
-            onClick={() => setMirrored((value) => !value)}
-          >
-            {mirrored ? "MIRRORED" : "DEFAULT"}
-          </button>
-        </div>
-
         <div className="modal-actions">
           <button
             type="button"
             className="okay"
             disabled={!canSubmit}
-            onClick={() => onSubmit({ widthFt, heightFt, mirrored })}
+            onClick={() => onSubmit({ widthFt, heightFt })}
           >
             OKAY
           </button>

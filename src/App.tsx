@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState } from "react";
-import { FloorTabs } from "./components/FloorTabs";
 import { ConfirmModal } from "./components/ConfirmModal";
 import { DuplicateNameModal } from "./components/DuplicateNameModal";
+import { FloorTabs } from "./components/FloorTabs";
+import { LeftToolbar } from "./components/LeftToolbar";
 import { LevelModal } from "./components/LevelModal";
 import type { LevelModalSubmit } from "./components/LevelModal";
-import { LeftToolbar } from "./components/LeftToolbar";
-import { OrientationControl } from "./components/OrientationControl";
 import { Workspace } from "./components/Workspace";
 import { EditorProvider, useEditor } from "./state/EditorContext";
+import type { Orientation } from "./types";
 
 const SIDEBAR_BASE_WIDTH = 280;
+const SIDEBAR_COLLAPSED_BASE_WIDTH = 84;
 const SIDEBAR_MIN_SCALE = 0.42;
+const ORIENTATION_ORDER: Orientation[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 
 interface LevelModalState {
   mode: "create" | "edit";
@@ -35,10 +37,12 @@ function selectedEntityType(state: ReturnType<typeof useEditor>["state"]): strin
   if (selection.kind !== "entity") {
     return null;
   }
+
   const floor = state.project.floors.find((item) => item.id === state.project.activeFloorId) ?? state.project.floors[0];
   if (!floor) {
     return null;
   }
+
   const selected = floor.entities.find((entity) => entity.id === selection.id);
   return selected?.type ?? null;
 }
@@ -71,6 +75,8 @@ function EditorShell() {
   const sidebarFrameRef = useRef<HTMLDivElement | null>(null);
   const sidebarScaleTargetRef = useRef<HTMLDivElement | null>(null);
   const [sidebarScale, setSidebarScale] = useState(1);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const sidebarBaseWidth = sidebarCollapsed ? SIDEBAR_COLLAPSED_BASE_WIDTH : SIDEBAR_BASE_WIDTH;
 
   useEffect(() => {
     const recalculateScale = () => {
@@ -82,7 +88,7 @@ function EditorShell() {
       }
 
       const availableHeight = frame.clientHeight;
-      const availableWidth = Math.max(160, shell.clientWidth * 0.42);
+      const availableWidth = Math.max(sidebarBaseWidth * SIDEBAR_MIN_SCALE, shell.clientWidth * 0.42);
       const naturalHeight = Math.max(1, target.scrollHeight);
       const naturalWidth = Math.max(1, target.scrollWidth);
 
@@ -113,7 +119,7 @@ function EditorShell() {
       window.removeEventListener("resize", recalculateScale);
       observer.disconnect();
     };
-  }, []);
+  }, [sidebarBaseWidth]);
 
   useEffect(() => {
     const preventGesture = (event: Event) => {
@@ -175,6 +181,10 @@ function EditorShell() {
     }
 
     if (target.closest(".header-actions")) {
+      return;
+    }
+
+    if (target.closest(".stage-header-title")) {
       return;
     }
 
@@ -262,6 +272,7 @@ function EditorShell() {
     if (!levelModalState || levelModalState.mode !== "edit" || !levelModalState.floorId) {
       return;
     }
+
     setDeleteLevelConfirmState({
       floorId: levelModalState.floorId,
       floorName: levelModalState.initialName,
@@ -272,9 +283,16 @@ function EditorShell() {
     if (!deleteLevelConfirmState) {
       return;
     }
+
     dispatch({ type: "DELETE_LEVEL", floorId: deleteLevelConfirmState.floorId });
     setDeleteLevelConfirmState(null);
     setLevelModalState(null);
+  };
+
+  const cycleOrientation = () => {
+    const currentIndex = ORIENTATION_ORDER.indexOf(state.project.orientation);
+    const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % ORIENTATION_ORDER.length : 0;
+    dispatch({ type: "SET_ORIENTATION", orientation: ORIENTATION_ORDER[nextIndex] });
   };
 
   return (
@@ -288,20 +306,31 @@ function EditorShell() {
       <div
         ref={sidebarFrameRef}
         className="sidebar-scale-frame"
-        style={{ width: `${SIDEBAR_BASE_WIDTH * sidebarScale}px` }}
+        style={{ width: `${sidebarBaseWidth * sidebarScale}px` }}
       >
         <div
           ref={sidebarScaleTargetRef}
           className="sidebar-scale-target"
-          style={{ transform: `scale(${sidebarScale})` }}
+          style={{ transform: `scale(${sidebarScale})`, width: `${sidebarBaseWidth}px` }}
         >
-          <LeftToolbar />
+          <LeftToolbar collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed((current) => !current)} />
         </div>
       </div>
 
       <main className="main-stage">
         <header className="stage-header">
-          <h1>SITE LAYOUT</h1>
+          <div className="stage-header-title">
+            <h1>HOME LAYOUT</h1>
+            <button
+              type="button"
+              className="header-orientation-btn"
+              onClick={cycleOrientation}
+              aria-label="Cycle orientation"
+              title={`Orientation: ${state.project.orientation}`}
+            >
+              {state.project.orientation}
+            </button>
+          </div>
           <div className="header-actions">
             <button type="button" disabled={!canUndo} onClick={() => dispatch({ type: "UNDO" })}>
               Undo
@@ -328,7 +357,6 @@ function EditorShell() {
             </button>
           </div>
         )}
-        <OrientationControl />
         <FloorTabs onRequestCreate={openCreateLevelModal} onRequestEdit={openEditLevelModal} />
       </main>
 

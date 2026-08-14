@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
+const COMMON_LEVEL_NAMES = ["1st Floor", "2nd Floor", "Basement", "Attic"] as const;
+
 export interface LevelModalSubmit {
   name: string;
   unconditioned: boolean;
@@ -31,6 +33,7 @@ export function LevelModal({
   onDelete,
 }: LevelModalProps) {
   const [name, setName] = useState("");
+  const [commonLevel, setCommonLevel] = useState("");
   const [unconditioned, setUnconditioned] = useState(false);
 
   useEffect(() => {
@@ -38,6 +41,7 @@ export function LevelModal({
       return;
     }
     setName(initialName);
+    setCommonLevel(COMMON_LEVEL_NAMES.includes(initialName as (typeof COMMON_LEVEL_NAMES)[number]) ? initialName : "");
     setUnconditioned(initialUnconditioned);
   }, [initialName, initialUnconditioned, isOpen]);
 
@@ -58,11 +62,38 @@ export function LevelModal({
         <h2>{title}</h2>
 
         <div className="modal-row">
+          <label>COMMON LEVEL:</label>
+          <select
+            value={commonLevel}
+            onChange={(event) => {
+              const value = event.target.value;
+              setCommonLevel(value);
+              if (value) {
+                setName(value);
+              }
+            }}
+          >
+            <option value="">Custom</option>
+            {COMMON_LEVEL_NAMES.map((levelName) => (
+              <option key={levelName} value={levelName}>
+                {levelName}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="modal-row">
           <label>NAME:</label>
           <input
             type="text"
             value={name}
-            onChange={(event) => setName(event.target.value)}
+            onChange={(event) => {
+              const nextName = event.target.value;
+              setName(nextName);
+              setCommonLevel(
+                COMMON_LEVEL_NAMES.includes(nextName as (typeof COMMON_LEVEL_NAMES)[number]) ? nextName : "",
+              );
+            }}
             placeholder="Level name"
           />
         </div>

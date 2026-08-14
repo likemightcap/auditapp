@@ -37,6 +37,7 @@ export function createInitialProject(): Project {
     metadata: {
       windowDefaultWidthFt: 3,
       windowDefaultHeightFt: 4,
+      doorDefaultType: "single",
     },
   };
 }
@@ -295,6 +296,15 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
           ...state.project.metadata,
           windowDefaultWidthFt: widthFt,
           windowDefaultHeightFt: heightFt,
+        },
+      });
+    }
+    case "SET_DEFAULT_DOOR_TYPE": {
+      return withHistory(state, {
+        ...state.project,
+        metadata: {
+          ...state.project.metadata,
+          doorDefaultType: action.doorType,
         },
       });
     }
