@@ -248,6 +248,10 @@ select {
   text-overflow: clip;
 }
 
+.utility-sticker-btn {
+  touch-action: none;
+}
+
 .tool-group-with-overlay {
   position: relative;
 }

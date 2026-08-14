@@ -339,7 +339,7 @@ function UtilityStickerGroup({
           <button
             key={tool.id}
             type="button"
-            className="tool-btn"
+            className="tool-btn utility-sticker-btn"
             draggable={false}
             onClick={(event) => {
               event.preventDefault();
@@ -403,7 +403,7 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
 
     const onPointerMove = (event: PointerEvent) => {
       setUtilityDrag((current) =>
-        current
+        current && current.pointerId === event.pointerId
           ? {
               ...current,
               x: event.clientX,
@@ -415,7 +415,7 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
 
     const onPointerUp = (event: PointerEvent) => {
       setUtilityDrag((current) => {
-        if (!current) {
+        if (!current || current.pointerId !== event.pointerId) {
           return null;
         }
 
@@ -472,6 +472,8 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
     if (!isUtilityToolId(toolId)) {
       return;
     }
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
     maybeClearSelectionForTool(toolId);
     setUtilityDrag({
       toolId,
