@@ -5,7 +5,7 @@ import App from './App.tsx'
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js?v=20260814-v4").catch(() => undefined);
+    navigator.serviceWorker.register("./sw.js?v=20260814-v5").catch(() => undefined);
   });
 }
 

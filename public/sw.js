@@ -1,10 +1,10 @@
-const CACHE_NAME = "audit-app-v4";
+const CACHE_NAME = "audit-app-v5";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./favicon.svg",
-  "./icons/app-icon-192-v4.png",
-  "./icons/app-icon-512-v4.png"
+  "./icons/app-icon-192-v5.png",
+  "./icons/app-icon-512-v5.png"
 ];
 
 function isPwaMetadataRequest(url) {

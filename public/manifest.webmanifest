@@ -1,9 +1,9 @@
 {
-  "id": "./?app=audit-v4",
+  "id": "./?app=audit-v5",
   "name": "Audit App",
   "short_name": "Audit",
   "description": "Assessment layout editor",
-  "start_url": "./?source=pwa-v4",
+  "start_url": "./?source=pwa-v5",
   "scope": "./",
   "display": "standalone",
   "orientation": "landscape",
@@ -11,13 +11,13 @@
   "theme_color": "#5f7270",
   "icons": [
     {
-      "src": "./icons/app-icon-192-v4.png",
+      "src": "./icons/app-icon-192-v5.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "./icons/app-icon-512-v4.png",
+      "src": "./icons/app-icon-512-v5.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
