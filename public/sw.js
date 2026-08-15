@@ -1,12 +1,16 @@
-const CACHE_NAME = "audit-app-v1";
+const CACHE_NAME = "audit-app-v2";
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./manifest.webmanifest",
+  "./manifest.webmanifest?v=20260814",
   "./favicon.svg",
-  "./icons/192.png",
-  "./icons/512.png"
+  "./icons/192.png?v=20260814",
+  "./icons/512.png?v=20260814"
 ];
+
+function isPwaMetadataRequest(url) {
+  return url.pathname.endsWith("/manifest.webmanifest") || url.pathname.includes("/icons/");
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -34,6 +38,21 @@ self.addEventListener("fetch", (event) => {
 
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) {
+    return;
+  }
+
+  if (isPwaMetadataRequest(url)) {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response && response.status === 200 && response.type === "basic") {
+            const responseClone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, responseClone));
+          }
+          return response;
+        })
+        .catch(() => caches.match(request)),
+    );
     return;
   }
 
