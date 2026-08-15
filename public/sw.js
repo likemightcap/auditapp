@@ -1,11 +1,10 @@
-const CACHE_NAME = "audit-app-v3";
+const CACHE_NAME = "audit-app-v4";
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./manifest.webmanifest",
   "./favicon.svg",
-  "./icons/app-icon-192-v3.png",
-  "./icons/app-icon-512-v3.png"
+  "./icons/app-icon-192-v4.png",
+  "./icons/app-icon-512-v4.png"
 ];
 
 function isPwaMetadataRequest(url) {
@@ -43,15 +42,7 @@ self.addEventListener("fetch", (event) => {
 
   if (isPwaMetadataRequest(url)) {
     event.respondWith(
-      fetch(request)
-        .then((response) => {
-          if (response && response.status === 200 && response.type === "basic") {
-            const responseClone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, responseClone));
-          }
-          return response;
-        })
-        .catch(() => caches.match(request)),
+      fetch(request, { cache: "no-store" }),
     );
     return;
   }
