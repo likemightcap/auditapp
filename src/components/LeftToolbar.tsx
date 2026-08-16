@@ -27,6 +27,10 @@ function getDoorToolTypeFromProjectMetadata(metadata: Record<string, string | nu
   return "single";
 }
 
+function getRectangleStickyModeFromProjectMetadata(metadata: Record<string, string | number | boolean>): boolean {
+  return Boolean(metadata.rectangleStickyMode);
+}
+
 const DOOR_TOOL_OPTIONS: Array<{ id: DoorToolType; label: string }> = [
   { id: "single", label: "DOOR" },
   { id: "double", label: "DOUBLE" },
@@ -136,6 +140,7 @@ function ToolGroup({
   ids,
   onWindowToolConfigRequest,
   doorType,
+  rectangleStickyMode,
   onDoorTypeChange,
   collapsed,
   onToolPressed,
@@ -144,6 +149,7 @@ function ToolGroup({
   ids: ToolId[];
   onWindowToolConfigRequest?: () => void;
   doorType?: DoorToolType;
+  rectangleStickyMode?: boolean;
   onDoorTypeChange?: (next: DoorToolType) => void;
   collapsed?: boolean;
   onToolPressed?: (toolId: ToolId) => void;
@@ -192,13 +198,15 @@ function ToolGroup({
             key={tool.id}
             ref={tool.id === "door" ? doorButtonRef : undefined}
             type="button"
-            className={`tool-btn ${state.activeTool === tool.id ? "active" : ""}`}
+            className={`tool-btn ${state.activeTool === tool.id ? "active" : ""} ${
+              tool.id === "rectangle" && rectangleStickyMode ? "tool-btn-sticky" : ""
+            }`}
             draggable={false}
             onClick={() => {
               if (isUtilityToolId(tool.id)) {
                 return;
               }
-              if ((tool.id === "window" || tool.id === "door") && longPressFiredRef.current) {
+              if ((tool.id === "window" || tool.id === "door" || tool.id === "rectangle") && longPressFiredRef.current) {
                 longPressFiredRef.current = false;
                 return;
               }
@@ -224,7 +232,7 @@ function ToolGroup({
               }
             }}
             onPointerDown={(event) => {
-              if ((tool.id !== "window" && tool.id !== "door") || event.button !== 0) {
+              if ((tool.id !== "window" && tool.id !== "door" && tool.id !== "rectangle") || event.button !== 0) {
                 return;
               }
               clearToolLongPress();
@@ -238,6 +246,10 @@ function ToolGroup({
                   onToolPressed?.("window");
                   dispatch({ type: "SET_TOOL", tool: "window" });
                   onWindowToolConfigRequest?.();
+                } else if (tool.id === "rectangle") {
+                  onToolPressed?.("rectangle");
+                  dispatch({ type: "SET_RECTANGLE_STICKY_MODE", enabled: !rectangleStickyMode });
+                  dispatch({ type: "SET_TOOL", tool: "rectangle" });
                 } else {
                   onToolPressed?.("door");
                   dispatch({ type: "SET_TOOL", tool: "door" });
@@ -248,7 +260,7 @@ function ToolGroup({
             }}
             onPointerMove={(event) => {
               if (
-                (tool.id !== "window" && tool.id !== "door") ||
+                (tool.id !== "window" && tool.id !== "door" && tool.id !== "rectangle") ||
                 longPressPointerIdRef.current !== event.pointerId ||
                 longPressTargetToolRef.current !== tool.id
               ) {
@@ -262,7 +274,7 @@ function ToolGroup({
             }}
             onPointerUp={(event) => {
               if (
-                (tool.id !== "window" && tool.id !== "door") ||
+                (tool.id !== "window" && tool.id !== "door" && tool.id !== "rectangle") ||
                 longPressPointerIdRef.current !== event.pointerId ||
                 longPressTargetToolRef.current !== tool.id
               ) {
@@ -272,7 +284,7 @@ function ToolGroup({
             }}
             onPointerCancel={(event) => {
               if (
-                (tool.id !== "window" && tool.id !== "door") ||
+                (tool.id !== "window" && tool.id !== "door" && tool.id !== "rectangle") ||
                 longPressPointerIdRef.current !== event.pointerId ||
                 longPressTargetToolRef.current !== tool.id
               ) {
@@ -281,7 +293,7 @@ function ToolGroup({
               clearToolLongPress();
             }}
             onPointerLeave={() => {
-              if (tool.id !== "window" && tool.id !== "door") {
+              if (tool.id !== "window" && tool.id !== "door" && tool.id !== "rectangle") {
                 return;
               }
               clearToolLongPress();
@@ -366,6 +378,7 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
   const { state, dispatch } = useEditor();
   const metrics = calculateProjectMetrics(state.project, state.previewEntity);
   const defaultDoorType = getDoorToolTypeFromProjectMetadata(state.project.metadata);
+  const rectangleStickyMode = getRectangleStickyModeFromProjectMetadata(state.project.metadata);
   const [windowToolModalOpen, setWindowToolModalOpen] = useState(false);
   const [utilityDrag, setUtilityDrag] = useState<UtilityDragState | null>(null);
   const [utilityLabelModalState, setUtilityLabelModalState] = useState<UtilityLabelModalState | null>(null);
@@ -563,6 +576,7 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
         title="TOOLS"
         ids={["select", "rectangle", "text"]}
         collapsed={collapsed}
+        rectangleStickyMode={rectangleStickyMode}
         onToolPressed={maybeClearSelectionForTool}
       />
       <ToolGroup
@@ -570,6 +584,7 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
         ids={["door", "window", "skylight"]}
         collapsed={collapsed}
         doorType={defaultDoorType}
+        rectangleStickyMode={rectangleStickyMode}
         onDoorTypeChange={(next) => dispatch({ type: "SET_DEFAULT_DOOR_TYPE", doorType: next })}
         onWindowToolConfigRequest={() => setWindowToolModalOpen(true)}
         onToolPressed={maybeClearSelectionForTool}

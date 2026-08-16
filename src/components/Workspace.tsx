@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from "react";
+import type { PointerEvent as ReactPointerEvent, ReactElement, WheelEvent as ReactWheelEvent } from "react";
 import { RectangleModal } from "./RectangleModal";
 import type { RectangleModalInitialValues, RectangleModalSubmit } from "./RectangleModal";
 import { TextModal } from "./TextModal";
@@ -46,7 +46,7 @@ interface InteractionState {
   targetId?: string;
   sourceRectangleId?: string;
   windowHandle?: "start" | "end";
-  tapAction?: "flip-door" | "deselect-empty";
+  tapAction?: "flip-door" | "deselect-empty" | "select-entity";
   entitySnapshot?: MapEntity;
   pointSnapshot?: WallPoint;
   resizeHandle?: ResizeHandle;
@@ -79,8 +79,9 @@ function fmtFeet(value: number): string {
 
 const WINDOW_FILL_THICKNESS = 0.56;
 const WINDOW_SELECTION_PADDING = 0.12;
-const WINDOW_ANCHOR_WIDTH = 0.22;
-const WINDOW_ANCHOR_HEIGHT = 0.46;
+const WINDOW_ANCHOR_WIDTH = 0.28;
+const WINDOW_ANCHOR_HEIGHT = 0.56;
+const WINDOW_HANDLE_HIT_SLOP = 0.34;
 const WINDOW_LABEL_OFFSET = 1.02;
 const LINEAR_MARKER_COLOR = "#edf5ff";
 const DOOR_FILL_COLOR = "#ffaa00";
@@ -92,6 +93,7 @@ const SLIDING_DOOR_DEFAULT_WIDTH = 6;
 const SLIDING_DOOR_DEFAULT_HEIGHT = 7;
 const SINGLE_DOOR_VISUAL_WIDTH = 3;
 const DOUBLE_DOOR_VISUAL_WIDTH = 6;
+const EDGE_MATCH_EPSILON = 0.001;
 
 type DoorKind = "single" | "double" | "sliding";
 
@@ -138,8 +140,12 @@ function getRectangleFillColor(color: string): string {
   }
 }
 
-function RectangleCeilingOverlay({ entity }: { entity: MapEntity }) {
+function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor?: Point }) {
   if (entity.type !== "rectangle") {
+    return null;
+  }
+
+  if (Boolean(entity.metadata.unconditioned)) {
     return null;
   }
 
@@ -152,8 +158,8 @@ function RectangleCeilingOverlay({ entity }: { entity: MapEntity }) {
   const lowHeight = Number(entity.metadata.lowHeightFt ?? 8);
   const highHeight = Number(entity.metadata.highHeightFt ?? 12);
 
-  const xCenter = entity.width / 2;
-  const yCenter = entity.height / 2;
+  const xCenter = anchor?.x ?? entity.width / 2;
+  const yCenter = anchor?.y ?? entity.height / 2;
   const inset = 1.2;
   const isCathedralVertical = ceilingType === "cathedral";
   const isCathedralHorizontal = ceilingType === "cathedral-horizontal";
@@ -362,7 +368,43 @@ interface RectangleGuideGroup {
   guides: GuideSegment[];
 }
 
+interface WorldBounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+interface ConnectedEdgeSegment {
+  orientation: "h" | "v";
+  x1?: number;
+  x2?: number;
+  y?: number;
+  x?: number;
+  y1?: number;
+  y2?: number;
+}
+
+interface EdgeRange {
+  start: number;
+  end: number;
+}
+
+interface ConnectedEdgeRanges {
+  top: EdgeRange[];
+  right: EdgeRange[];
+  bottom: EdgeRange[];
+  left: EdgeRange[];
+}
+
+interface ConnectedEdgeRenderRanges {
+  carveById: Map<string, ConnectedEdgeRanges>;
+  dashById: Map<string, ConnectedEdgeRanges>;
+}
+
 type ResizeHandle = "n" | "s" | "e" | "w" | "nw" | "ne" | "sw" | "se";
+
+type PushDirection = "north" | "south" | "east" | "west";
 
 interface ViewportSize {
   width: number;
@@ -978,6 +1020,384 @@ function rectBoundsFromEntity(entity: MapEntity): RectBounds {
   };
 }
 
+function quantizeEdgeCoord(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+function nearlyEqualEdge(a: number, b: number): boolean {
+  return Math.abs(a - b) <= EDGE_MATCH_EPSILON;
+}
+
+function rectBoundsForConnectedEdgeMath(entity: MapEntity): RectBounds {
+  const rect = rectBoundsFromEntity(entity);
+  return {
+    x: quantizeEdgeCoord(rect.x),
+    y: quantizeEdgeCoord(rect.y),
+    width: quantizeEdgeCoord(rect.width),
+    height: quantizeEdgeCoord(rect.height),
+  };
+}
+
+function isUnconditionedRectangle(entity: MapEntity): boolean {
+  return entity.type === "rectangle" && Boolean(entity.metadata.unconditioned);
+}
+
+function getRectangleCeilingSignature(entity: MapEntity): string {
+  const ceilingType = String(entity.metadata.ceilingType ?? "standard");
+  const standardHeight = Number(entity.metadata.standardHeightFt ?? 8);
+  const lowHeight = Number(entity.metadata.lowHeightFt ?? 8);
+  const highHeight = Number(entity.metadata.highHeightFt ?? 12);
+  return `${ceilingType}|${standardHeight}|${lowHeight}|${highHeight}`;
+}
+
+function getSharedEdgeSegmentsBetweenRects(a: RectBounds, b: RectBounds): ConnectedEdgeSegment[] {
+  const segments: ConnectedEdgeSegment[] = [];
+  const aRight = quantizeEdgeCoord(a.x + a.width);
+  const bRight = quantizeEdgeCoord(b.x + b.width);
+  const aBottom = quantizeEdgeCoord(a.y + a.height);
+  const bBottom = quantizeEdgeCoord(b.y + b.height);
+
+  if (nearlyEqualEdge(aRight, b.x) || nearlyEqualEdge(bRight, a.x)) {
+    const y1 = Math.max(a.y, b.y);
+    const y2 = Math.min(aBottom, bBottom);
+    if (y2 - y1 > EDGE_MATCH_EPSILON) {
+      const x = nearlyEqualEdge(aRight, b.x) ? quantizeEdgeCoord((aRight + b.x) / 2) : quantizeEdgeCoord((bRight + a.x) / 2);
+      segments.push({ orientation: "v", x, y1, y2 });
+    }
+  }
+
+  if (nearlyEqualEdge(aBottom, b.y) || nearlyEqualEdge(bBottom, a.y)) {
+    const x1 = Math.max(a.x, b.x);
+    const x2 = Math.min(aRight, bRight);
+    if (x2 - x1 > EDGE_MATCH_EPSILON) {
+      const y = nearlyEqualEdge(aBottom, b.y) ? quantizeEdgeCoord((aBottom + b.y) / 2) : quantizeEdgeCoord((bBottom + a.y) / 2);
+      segments.push({ orientation: "h", x1, x2, y });
+    }
+  }
+
+  return segments;
+}
+
+function mergeEdgeRanges(ranges: EdgeRange[]): EdgeRange[] {
+  if (ranges.length === 0) {
+    return [];
+  }
+
+  const sorted = [...ranges]
+    .filter((range) => range.end > range.start)
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+  if (sorted.length === 0) {
+    return [];
+  }
+
+  const merged: EdgeRange[] = [{ ...sorted[0] }];
+  for (let index = 1; index < sorted.length; index += 1) {
+    const current = sorted[index];
+    const previous = merged[merged.length - 1];
+    if (current.start <= previous.end) {
+      previous.end = Math.max(previous.end, current.end);
+    } else {
+      merged.push({ ...current });
+    }
+  }
+  return merged;
+}
+
+function getAlignedDashOffset(start: number): number {
+  const dashCycle = 0.8; // Matches strokeDasharray="0.5 0.3"
+  const normalizedStart = ((start % dashCycle) + dashCycle) % dashCycle;
+  return -normalizedStart;
+}
+
+function buildConditionedConnectedEdgeRanges(rectangles: MapEntity[]): ConnectedEdgeRenderRanges {
+  const conditioned = rectangles.filter((entity) => !isUnconditionedRectangle(entity));
+  const boundsById = new Map(conditioned.map((entity) => [entity.id, rectBoundsForConnectedEdgeMath(entity)]));
+  const carveById = new Map<string, ConnectedEdgeRanges>(
+    conditioned.map((entity) => [
+      entity.id,
+      { top: [], right: [], bottom: [], left: [] },
+    ]),
+  );
+  const dashById = new Map<string, ConnectedEdgeRanges>(
+    conditioned.map((entity) => [
+      entity.id,
+      { top: [], right: [], bottom: [], left: [] },
+    ]),
+  );
+
+  const addSegmentToRanges = (rect: RectBounds, ranges: ConnectedEdgeRanges, segment: ConnectedEdgeSegment) => {
+    if (segment.orientation === "h") {
+      const y = segment.y as number;
+      const start = segment.x1 as number;
+      const end = segment.x2 as number;
+      if (nearlyEqualEdge(y, rect.y)) {
+        ranges.top.push({ start, end });
+      }
+      if (nearlyEqualEdge(y, rect.y + rect.height)) {
+        ranges.bottom.push({ start, end });
+      }
+      return;
+    }
+
+    const x = segment.x as number;
+    const start = segment.y1 as number;
+    const end = segment.y2 as number;
+    if (nearlyEqualEdge(x, rect.x)) {
+      ranges.left.push({ start, end });
+    }
+    if (nearlyEqualEdge(x, rect.x + rect.width)) {
+      ranges.right.push({ start, end });
+    }
+  };
+
+  for (let i = 0; i < conditioned.length; i += 1) {
+    const a = conditioned[i];
+    const aRect = boundsById.get(a.id);
+    if (!aRect) {
+      continue;
+    }
+    for (let j = i + 1; j < conditioned.length; j += 1) {
+      const b = conditioned[j];
+      const bRect = boundsById.get(b.id);
+      if (!bRect) {
+        continue;
+      }
+
+      const shared = getSharedEdgeSegmentsBetweenRects(aRect, bRect);
+      if (shared.length === 0) {
+        continue;
+      }
+
+      const aCarveRanges = carveById.get(a.id);
+      const bCarveRanges = carveById.get(b.id);
+      const aDashRanges = dashById.get(a.id);
+      const bDashRanges = dashById.get(b.id);
+      if (!aCarveRanges || !bCarveRanges || !aDashRanges || !bDashRanges) {
+        continue;
+      }
+
+      const ownerIsA = a.id < b.id;
+      const ownerRect = ownerIsA ? aRect : bRect;
+      const ownerDashRanges = ownerIsA ? aDashRanges : bDashRanges;
+
+      for (const segment of shared) {
+        addSegmentToRanges(aRect, aCarveRanges, segment);
+        addSegmentToRanges(bRect, bCarveRanges, segment);
+        addSegmentToRanges(ownerRect, ownerDashRanges, segment);
+      }
+    }
+  }
+
+  for (const [id, ranges] of carveById) {
+    carveById.set(id, {
+      top: mergeEdgeRanges(ranges.top),
+      right: mergeEdgeRanges(ranges.right),
+      bottom: mergeEdgeRanges(ranges.bottom),
+      left: mergeEdgeRanges(ranges.left),
+    });
+  }
+
+  for (const [id, ranges] of dashById) {
+    dashById.set(id, {
+      top: mergeEdgeRanges(ranges.top),
+      right: mergeEdgeRanges(ranges.right),
+      bottom: mergeEdgeRanges(ranges.bottom),
+      left: mergeEdgeRanges(ranges.left),
+    });
+  }
+
+  return { carveById, dashById };
+}
+
+function buildSharedCeilingOverlayPlacement(rectangles: MapEntity[]): {
+  visibleIds: Set<string>;
+  anchorById: Map<string, Point>;
+} {
+  const visibleIds = new Set<string>();
+  const anchorById = new Map<string, Point>();
+
+  const conditioned = rectangles.filter((entity) => !isUnconditionedRectangle(entity));
+  const adjacency = new Map<string, Set<string>>();
+
+  for (const entity of conditioned) {
+    adjacency.set(entity.id, new Set());
+  }
+
+  for (let i = 0; i < conditioned.length; i += 1) {
+    const aEntity = conditioned[i];
+    const aRect = rectBoundsFromEntity(aEntity);
+    for (let j = i + 1; j < conditioned.length; j += 1) {
+      const bEntity = conditioned[j];
+      if (getRectangleCeilingSignature(aEntity) !== getRectangleCeilingSignature(bEntity)) {
+        continue;
+      }
+      const bRect = rectBoundsFromEntity(bEntity);
+      const shared = getSharedEdgeSegmentsBetweenRects(aRect, bRect);
+      if (shared.length === 0) {
+        continue;
+      }
+      adjacency.get(aEntity.id)?.add(bEntity.id);
+      adjacency.get(bEntity.id)?.add(aEntity.id);
+    }
+  }
+
+  const visited = new Set<string>();
+  for (const entity of conditioned) {
+    if (visited.has(entity.id)) {
+      continue;
+    }
+    const queue = [entity.id];
+    const component: string[] = [];
+    visited.add(entity.id);
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (!current) {
+        continue;
+      }
+      component.push(current);
+      for (const neighbor of adjacency.get(current) ?? []) {
+        if (visited.has(neighbor)) {
+          continue;
+        }
+        visited.add(neighbor);
+        queue.push(neighbor);
+      }
+    }
+
+    if (component.length === 0) {
+      continue;
+    }
+
+    const componentEntities = component
+      .map((id) => conditioned.find((entity) => entity.id === id))
+      .filter((entity): entity is MapEntity => Boolean(entity));
+
+    if (componentEntities.length === 0) {
+      continue;
+    }
+
+    const host = componentEntities.reduce((best, current) => {
+      const bestArea = Math.abs(best.width) * Math.abs(best.height);
+      const currentArea = Math.abs(current.width) * Math.abs(current.height);
+      return currentArea > bestArea ? current : best;
+    }, componentEntities[0]);
+
+    visibleIds.add(host.id);
+  }
+
+  for (const entity of rectangles) {
+    if (!isUnconditionedRectangle(entity)) {
+      continue;
+    }
+    visibleIds.add(entity.id);
+  }
+
+  for (const id of [...visibleIds]) {
+    if (!rectangles.some((entity) => entity.id === id)) {
+      visibleIds.delete(id);
+      anchorById.delete(id);
+    }
+  }
+
+  return { visibleIds, anchorById };
+}
+
+function expandBounds(bounds: WorldBounds | null, candidate: WorldBounds): WorldBounds {
+  if (!bounds) {
+    return candidate;
+  }
+  return {
+    minX: Math.min(bounds.minX, candidate.minX),
+    minY: Math.min(bounds.minY, candidate.minY),
+    maxX: Math.max(bounds.maxX, candidate.maxX),
+    maxY: Math.max(bounds.maxY, candidate.maxY),
+  };
+}
+
+function getEntityWorldBounds(entity: MapEntity): WorldBounds | null {
+  if (entity.type === "rectangle") {
+    const rect = rectBoundsFromEntity(entity);
+    return {
+      minX: rect.x,
+      minY: rect.y,
+      maxX: rect.x + rect.width,
+      maxY: rect.y + rect.height,
+    };
+  }
+
+  if (entity.type === "line") {
+    return {
+      minX: Math.min(entity.x, entity.x + entity.width),
+      minY: Math.min(entity.y, entity.y + entity.height),
+      maxX: Math.max(entity.x, entity.x + entity.width),
+      maxY: Math.max(entity.y, entity.y + entity.height),
+    };
+  }
+
+  if (entity.type === "window" || entity.type === "door") {
+    const half = Math.max(0.5, Math.abs(entity.width) / 2);
+    return {
+      minX: entity.x - half,
+      minY: entity.y - half,
+      maxX: entity.x + half,
+      maxY: entity.y + half,
+    };
+  }
+
+  if (entity.type === "skylight" || isUtilityEntityType(entity.type)) {
+    const halfWidth = Math.max(0.5, Math.abs(entity.width) / 2);
+    const halfHeight = Math.max(0.5, Math.abs(entity.height) / 2);
+    return {
+      minX: entity.x - halfWidth,
+      minY: entity.y - halfHeight,
+      maxX: entity.x + halfWidth,
+      maxY: entity.y + halfHeight,
+    };
+  }
+
+  return {
+    minX: entity.x,
+    minY: entity.y,
+    maxX: entity.x,
+    maxY: entity.y,
+  };
+}
+
+function getGuideWorldBounds(groups: RectangleGuideGroup[]): WorldBounds | null {
+  let bounds: WorldBounds | null = null;
+  const hOffset = 4.5;
+  const vOffset = 4.5;
+  const staggerStep = 1.8;
+  const estimatedMaxShift = 2;
+  const markerReach = hOffset + estimatedMaxShift * staggerStep;
+  const edgeLabelPad = 1.1;
+
+  for (const group of groups) {
+    for (const guide of group.guides) {
+      if (guide.orientation === "h") {
+        const guideY = guide.side === "top" ? guide.y - markerReach : guide.y + markerReach;
+        bounds = expandBounds(bounds, {
+          minX: Math.min(guide.x1, guide.x2) - edgeLabelPad,
+          maxX: Math.max(guide.x1, guide.x2) + edgeLabelPad,
+          minY: guideY - edgeLabelPad,
+          maxY: guideY + edgeLabelPad,
+        });
+      } else {
+        const guideX = guide.side === "left" ? guide.x - (vOffset + estimatedMaxShift * staggerStep) : guide.x + (vOffset + estimatedMaxShift * staggerStep);
+        bounds = expandBounds(bounds, {
+          minX: guideX - edgeLabelPad,
+          maxX: guideX + edgeLabelPad,
+          minY: Math.min(guide.y1, guide.y2) - edgeLabelPad,
+          maxY: Math.max(guide.y1, guide.y2) + edgeLabelPad,
+        });
+      }
+    }
+  }
+
+  return bounds;
+}
+
 function clampValue(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -1117,6 +1537,28 @@ function lockWindowPointToHostEdge(world: Point, entity: MapEntity, rectangles: 
     return { x: Math.round(x1), y: Math.round(clampValue(world.y, y1, y2)) };
   }
   return { x: Math.round(x2), y: Math.round(clampValue(world.y, y1, y2)) };
+}
+
+function lockSkylightCenterToHostRect(world: Point, entity: MapEntity, rectangles: MapEntity[]): Point {
+  const hostRect = getHostRectForEntity(entity, rectangles);
+  if (!hostRect) {
+    return {
+      x: Math.round(world.x),
+      y: Math.round(world.y),
+    };
+  }
+
+  const halfWidth = Math.abs(entity.width) / 2;
+  const halfHeight = Math.abs(entity.height) / 2;
+  const minX = hostRect.x + halfWidth;
+  const maxX = hostRect.x + hostRect.width - halfWidth;
+  const minY = hostRect.y + halfHeight;
+  const maxY = hostRect.y + hostRect.height - halfHeight;
+
+  return {
+    x: minX <= maxX ? clampValue(Math.round(world.x), minX, maxX) : Math.round(hostRect.x + hostRect.width / 2),
+    y: minY <= maxY ? clampValue(Math.round(world.y), minY, maxY) : Math.round(hostRect.y + hostRect.height / 2),
+  };
 }
 
 interface OpeningSpan {
@@ -1285,6 +1727,261 @@ function applyRectResize(rect: RectBounds, world: Point, handle: ResizeHandle): 
   };
 }
 
+function findRectangleContainingPoint(point: Point, rectangles: MapEntity[]): MapEntity | null {
+  for (let index = rectangles.length - 1; index >= 0; index -= 1) {
+    const rectangle = rectangles[index];
+    const bounds = rectBoundsFromEntity(rectangle);
+    if (
+      point.x >= bounds.x &&
+      point.x <= bounds.x + bounds.width &&
+      point.y >= bounds.y &&
+      point.y <= bounds.y + bounds.height
+    ) {
+      return rectangle;
+    }
+  }
+  return null;
+}
+
+function isSkylightInsideRectangle(skylight: MapEntity, rectangle: MapEntity): boolean {
+  if (skylight.type !== "skylight") {
+    return false;
+  }
+  const bounds = rectBoundsFromEntity(rectangle);
+  const halfWidth = Math.abs(skylight.width) / 2;
+  const halfHeight = Math.abs(skylight.height) / 2;
+  const left = skylight.x - halfWidth;
+  const right = skylight.x + halfWidth;
+  const top = skylight.y - halfHeight;
+  const bottom = skylight.y + halfHeight;
+
+  return (
+    left >= bounds.x &&
+    right <= bounds.x + bounds.width &&
+    top >= bounds.y &&
+    bottom <= bounds.y + bounds.height
+  );
+}
+
+function clampRectResizeToAttachedOpenings(
+  sourceRect: RectBounds,
+  nextRect: RectBounds,
+  rectId: string,
+  handle: ResizeHandle,
+  entities: MapEntity[],
+): RectBounds {
+  const attached = entities.filter(
+    (entity) =>
+      (entity.type === "door" || entity.type === "window") &&
+      entity.metadata.hostRectId === rectId,
+  );
+  if (attached.length === 0) {
+    return nextRect;
+  }
+
+  const moveWest = handle === "w" || handle === "nw" || handle === "sw";
+  const moveEast = handle === "e" || handle === "ne" || handle === "se";
+  const moveNorth = handle === "n" || handle === "nw" || handle === "ne";
+  const moveSouth = handle === "s" || handle === "sw" || handle === "se";
+
+  const sourceX1 = sourceRect.x;
+  const sourceY1 = sourceRect.y;
+  const sourceX2 = sourceRect.x + sourceRect.width;
+  const sourceY2 = sourceRect.y + sourceRect.height;
+
+  const nextX1 = nextRect.x;
+  const nextY1 = nextRect.y;
+  const nextX2 = nextRect.x + nextRect.width;
+  const nextY2 = nextRect.y + nextRect.height;
+
+  const shrinkWest = moveWest && nextX1 > sourceX1;
+  const shrinkEast = moveEast && nextX2 < sourceX2;
+  const shrinkNorth = moveNorth && nextY1 > sourceY1;
+  const shrinkSouth = moveSouth && nextY2 < sourceY2;
+
+  const westLimits: number[] = [];
+  const eastLimits: number[] = [];
+  const northLimits: number[] = [];
+  const southLimits: number[] = [];
+
+  for (const entity of attached) {
+    const edge = (entity.metadata.edge as RectEdge | undefined) ?? "top";
+    const half = Math.abs(entity.width) / 2;
+
+    if ((shrinkWest || shrinkEast) && (edge === "top" || edge === "bottom")) {
+      westLimits.push(entity.x - half);
+      eastLimits.push(entity.x + half);
+    }
+
+    if ((shrinkNorth || shrinkSouth) && (edge === "left" || edge === "right")) {
+      northLimits.push(entity.y - half);
+      southLimits.push(entity.y + half);
+    }
+  }
+
+  let x1 = nextRect.x;
+  let y1 = nextRect.y;
+  let x2 = nextRect.x + nextRect.width;
+  let y2 = nextRect.y + nextRect.height;
+
+  if (shrinkWest && westLimits.length > 0) {
+    x1 = Math.min(x1, Math.min(...westLimits));
+  }
+  if (shrinkEast && eastLimits.length > 0) {
+    x2 = Math.max(x2, Math.max(...eastLimits));
+  }
+  if (shrinkNorth && northLimits.length > 0) {
+    y1 = Math.min(y1, Math.min(...northLimits));
+  }
+  if (shrinkSouth && southLimits.length > 0) {
+    y2 = Math.max(y2, Math.max(...southLimits));
+  }
+
+  if (x2 < x1 + 1) {
+    if (moveWest && !moveEast) {
+      x1 = x2 - 1;
+    } else {
+      x2 = x1 + 1;
+    }
+  }
+  if (y2 < y1 + 1) {
+    if (moveNorth && !moveSouth) {
+      y1 = y2 - 1;
+    } else {
+      y2 = y1 + 1;
+    }
+  }
+
+  return {
+    x: x1,
+    y: y1,
+    width: Math.max(1, x2 - x1),
+    height: Math.max(1, y2 - y1),
+  };
+}
+
+function rangesOverlap(startA: number, endA: number, startB: number, endB: number): boolean {
+  return Math.min(endA, endB) > Math.max(startA, startB);
+}
+
+function isConnectedOnPushFace(source: RectBounds, target: RectBounds, direction: PushDirection): boolean {
+  if (direction === "east") {
+    return (
+      target.x === source.x + source.width &&
+      rangesOverlap(source.y, source.y + source.height, target.y, target.y + target.height)
+    );
+  }
+  if (direction === "west") {
+    return (
+      target.x + target.width === source.x &&
+      rangesOverlap(source.y, source.y + source.height, target.y, target.y + target.height)
+    );
+  }
+  if (direction === "south") {
+    return (
+      target.y === source.y + source.height &&
+      rangesOverlap(source.x, source.x + source.width, target.x, target.x + target.width)
+    );
+  }
+  return (
+    target.y + target.height === source.y &&
+    rangesOverlap(source.x, source.x + source.width, target.x, target.x + target.width)
+  );
+}
+
+function getConnectedPushForRectangleResize(
+  sourceEntity: MapEntity,
+  nextRect: RectBounds,
+  handle: ResizeHandle,
+  entities: MapEntity[],
+): Array<{ id: string; x: number; y: number }> {
+  if (sourceEntity.type !== "rectangle") {
+    return [];
+  }
+
+  const sourceRect = rectBoundsFromEntity(sourceEntity);
+
+  let direction: PushDirection | null = null;
+  let edgeDelta = 0;
+
+  if (handle === "e") {
+    edgeDelta = nextRect.x + nextRect.width - (sourceRect.x + sourceRect.width);
+    if (edgeDelta !== 0) {
+      direction = "east";
+    }
+  } else if (handle === "w") {
+    edgeDelta = nextRect.x - sourceRect.x;
+    if (edgeDelta !== 0) {
+      direction = "west";
+    }
+  } else if (handle === "s") {
+    edgeDelta = nextRect.y + nextRect.height - (sourceRect.y + sourceRect.height);
+    if (edgeDelta !== 0) {
+      direction = "south";
+    }
+  } else if (handle === "n") {
+    edgeDelta = nextRect.y - sourceRect.y;
+    if (edgeDelta !== 0) {
+      direction = "north";
+    }
+  }
+
+  if (!direction || edgeDelta === 0) {
+    return [];
+  }
+
+  const rectangles = entities.filter((entity) => entity.type === "rectangle" && entity.id !== sourceEntity.id);
+  const rectById = new Map(
+    rectangles.map((entity) => [
+      entity.id,
+      {
+        entity,
+        rect: rectBoundsFromEntity(entity),
+      },
+    ]),
+  );
+
+  const queue: string[] = [];
+  const moved = new Set<string>();
+
+  for (const { entity, rect } of rectById.values()) {
+    if (isConnectedOnPushFace(sourceRect, rect, direction)) {
+      queue.push(entity.id);
+      moved.add(entity.id);
+    }
+  }
+
+  while (queue.length > 0) {
+    const currentId = queue.shift();
+    if (!currentId) {
+      continue;
+    }
+    const current = rectById.get(currentId);
+    if (!current) {
+      continue;
+    }
+
+    for (const { entity, rect } of rectById.values()) {
+      if (moved.has(entity.id)) {
+        continue;
+      }
+      if (isConnectedOnPushFace(current.rect, rect, direction)) {
+        moved.add(entity.id);
+        queue.push(entity.id);
+      }
+    }
+  }
+
+  return [...moved]
+    .map((id) => rectById.get(id)?.entity)
+    .filter((entity): entity is MapEntity => Boolean(entity))
+    .map((entity) => ({
+      id: entity.id,
+      x: direction === "east" || direction === "west" ? entity.x + edgeDelta : entity.x,
+      y: direction === "north" || direction === "south" ? entity.y + edgeDelta : entity.y,
+    }));
+}
+
 function canStartLongPress(pointerType: string, button: number): boolean {
   if (button !== 0) {
     return false;
@@ -1305,6 +2002,7 @@ function getDragThresholdPx(pointerType: string | undefined): number {
 export function Workspace() {
   const { state, dispatch } = useEditor();
   const floor = getFloor(state);
+  const rectangleStickyMode = Boolean(state.project.metadata.rectangleStickyMode);
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const initializedViewRef = useRef(false);
@@ -1316,6 +2014,7 @@ export function Workspace() {
   const [slidingDoorModalState, setSlidingDoorModalState] = useState<SlidingDoorModalState | null>(null);
   const [windowModalState, setWindowModalState] = useState<WindowModalState | null>(null);
   const [utilityLabelModalState, setUtilityLabelModalState] = useState<UtilityLabelModalState | null>(null);
+  const [cameraPanelCollapsed, setCameraPanelCollapsed] = useState(false);
   const [viewportSize, setViewportSize] = useState<ViewportSize>({ width: 0, height: 0 });
   const touchPointsRef = useRef<Map<number, Point>>(new Map());
   const longPressRef = useRef<LongPressState>({
@@ -1397,6 +2096,57 @@ export function Workspace() {
     return buildRectangleGuideGroups(rectangles);
   }, [floor.entities]);
 
+  const conditionedConnectedEdgeRanges = useMemo(
+    () => buildConditionedConnectedEdgeRanges(rectangleEntities),
+    [rectangleEntities],
+  );
+
+  const sharedCeilingOverlayPlacement = useMemo(
+    () => buildSharedCeilingOverlayPlacement(rectangleEntities),
+    [rectangleEntities],
+  );
+
+  const frameTargetBounds = useMemo(() => {
+    let bounds: WorldBounds | null = null;
+
+    for (const entity of floor.entities) {
+      const entityBounds = getEntityWorldBounds(entity);
+      if (entityBounds) {
+        bounds = expandBounds(bounds, entityBounds);
+      }
+    }
+
+    for (const point of floor.wallPoints) {
+      bounds = expandBounds(bounds, {
+        minX: point.x - 0.6,
+        minY: point.y - 0.6,
+        maxX: point.x + 0.6,
+        maxY: point.y + 0.6,
+      });
+    }
+
+    for (const segment of floor.wallSegments) {
+      const start = pointById.get(segment.startPointId);
+      const end = pointById.get(segment.endPointId);
+      if (!start || !end) {
+        continue;
+      }
+      bounds = expandBounds(bounds, {
+        minX: Math.min(start.x, end.x),
+        minY: Math.min(start.y, end.y),
+        maxX: Math.max(start.x, end.x),
+        maxY: Math.max(start.y, end.y),
+      });
+    }
+
+    const markerBounds = getGuideWorldBounds(rectangleGuideGroups);
+    if (markerBounds) {
+      bounds = expandBounds(bounds, markerBounds);
+    }
+
+    return bounds;
+  }, [floor.entities, floor.wallPoints, floor.wallSegments, pointById, rectangleGuideGroups]);
+
   const worldViewport = useMemo(() => {
     const width = viewportSize.width || svgRef.current?.clientWidth || 1200;
     const height = viewportSize.height || svgRef.current?.clientHeight || 800;
@@ -1435,7 +2185,7 @@ export function Workspace() {
       return;
     }
 
-    const targetCellsWide = 75;
+    const targetCellsWide = 80;
     const nextZoom = clamp(workspace.clientWidth / targetCellsWide, MIN_ZOOM, MAX_ZOOM);
     dispatch({ type: "SET_CAMERA", camera: { zoom: nextZoom } });
     initializedViewRef.current = true;
@@ -1935,7 +2685,15 @@ export function Workspace() {
     }
 
     if (tool.entityType === "skylight") {
+      const hostRectangle = findRectangleContainingPoint(world, rectangleEntities);
+      if (!hostRectangle) {
+        return;
+      }
       const nextEntity = createEntityFromTool("skylight", Math.round(world.x), Math.round(world.y));
+      nextEntity.metadata = {
+        ...nextEntity.metadata,
+        hostRectId: hostRectangle.id,
+      };
       interactionRef.current = {
         type: "draw-rect",
         pointerId: event.pointerId,
@@ -2096,6 +2854,26 @@ export function Workspace() {
         return;
       }
 
+      if (interaction.entitySnapshot.type === "skylight") {
+        const locked = lockSkylightCenterToHostRect(
+          {
+            x: interaction.entitySnapshot.x + dx,
+            y: interaction.entitySnapshot.y + dy,
+          },
+          interaction.entitySnapshot,
+          rectangleEntities,
+        );
+        dispatch({
+          type: "SET_PREVIEW_ENTITY",
+          entity: {
+            ...interaction.entitySnapshot,
+            x: locked.x,
+            y: locked.y,
+          },
+        });
+        return;
+      }
+
       const snapped = snapPointToGrid({
         x: interaction.entitySnapshot.x + dx,
         y: interaction.entitySnapshot.y + dy,
@@ -2135,7 +2913,17 @@ export function Workspace() {
               height: interaction.entitySnapshot.height,
             }
           : rectBoundsFromEntity(interaction.entitySnapshot);
-      const nextRect = applyRectResize(sourceRect, world, interaction.resizeHandle);
+      const resizedRect = applyRectResize(sourceRect, world, interaction.resizeHandle);
+      const nextRect =
+        interaction.entitySnapshot.type === "rectangle"
+          ? clampRectResizeToAttachedOpenings(
+              sourceRect,
+              resizedRect,
+              interaction.entitySnapshot.id,
+              interaction.resizeHandle,
+              floor.entities,
+            )
+          : resizedRect;
       const updated: MapEntity =
         interaction.entitySnapshot.type === "skylight"
           ? {
@@ -2152,8 +2940,6 @@ export function Workspace() {
               width: nextRect.width,
               height: nextRect.height,
             };
-      dispatch({ type: "UPSERT_ENTITY", entity: updated });
-      dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: updated.id } });
       dispatch({ type: "SET_PREVIEW_ENTITY", entity: updated });
       return;
     }
@@ -2227,8 +3013,6 @@ export function Workspace() {
       updated.x = resolvedPosition.x;
       updated.y = resolvedPosition.y;
 
-      dispatch({ type: "UPSERT_ENTITY", entity: updated });
-      dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: updated.id } });
       dispatch({ type: "SET_PREVIEW_ENTITY", entity: updated });
       return;
     }
@@ -2246,8 +3030,6 @@ export function Workspace() {
         width: Math.max(1, Math.round(Math.abs(snapshot.width + dx))),
         height: Math.max(1, Math.round(Math.abs(snapshot.height + dy))),
       };
-      dispatch({ type: "UPSERT_ENTITY", entity: updated });
-      dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: updated.id } });
       dispatch({ type: "SET_PREVIEW_ENTITY", entity: updated });
       return;
     }
@@ -2272,6 +3054,37 @@ export function Workspace() {
       const minY = Math.round(Math.min(start.y, end.y));
       const maxX = Math.round(Math.max(start.x, end.x));
       const maxY = Math.round(Math.max(start.y, end.y));
+
+      if (interaction.entitySnapshot.type === "skylight") {
+        const hostRectId = interaction.entitySnapshot.metadata.hostRectId as string | undefined;
+        const hostRect = hostRectId
+          ? rectangleEntities.find((rectangle) => rectangle.id === hostRectId)
+          : null;
+        if (!hostRect) {
+          return;
+        }
+
+        const host = rectBoundsFromEntity(hostRect);
+        const clampedEndX = clampValue(end.x, host.x, host.x + host.width);
+        const clampedEndY = clampValue(end.y, host.y, host.y + host.height);
+        const drawMinX = Math.round(Math.min(start.x, clampedEndX));
+        const drawMinY = Math.round(Math.min(start.y, clampedEndY));
+        const drawMaxX = Math.round(Math.max(start.x, clampedEndX));
+        const drawMaxY = Math.round(Math.max(start.y, clampedEndY));
+        const width = Math.max(1, drawMaxX - drawMinX);
+        const height = Math.max(1, drawMaxY - drawMinY);
+        const nextDraft = {
+          ...interaction.entitySnapshot,
+          x: drawMinX,
+          y: drawMinY,
+          width,
+          height,
+        };
+        setDraftEntity(nextDraft);
+        dispatch({ type: "SET_PREVIEW_ENTITY", entity: nextDraft });
+        return;
+      }
+
       const nextDraft = {
         ...interaction.entitySnapshot,
         x: minX,
@@ -2327,6 +3140,15 @@ export function Workspace() {
       !interaction.dragStarted
     ) {
       dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
+    }
+
+    if (
+      interaction.type === "pan" &&
+      interaction.tapAction === "select-entity" &&
+      interaction.targetId &&
+      !interaction.dragStarted
+    ) {
+      dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: interaction.targetId } });
     }
 
     if (
@@ -2404,6 +3226,16 @@ export function Workspace() {
             snapshot.id,
           ) ?? { x: snapshot.x, y: snapshot.y };
         dispatch({ type: "MOVE_ENTITY", entityId: interaction.targetId, x: next.x, y: next.y });
+      } else if (snapshot.type === "skylight") {
+        const locked = lockSkylightCenterToHostRect(
+          {
+            x: snapshot.x + dx,
+            y: snapshot.y + dy,
+          },
+          snapshot,
+          rectangleEntities,
+        );
+        dispatch({ type: "MOVE_ENTITY", entityId: interaction.targetId, x: locked.x, y: locked.y });
       } else {
         const snapped = snapPointToGrid({
           x: snapshot.x + dx,
@@ -2423,23 +3255,67 @@ export function Workspace() {
 
     if (interaction.type === "draw-rect" && interaction.entitySnapshot) {
       if (interaction.dragStarted && draftEntity) {
-        const snapped = {
-          ...draftEntity,
-          x: Math.round(draftEntity.x),
-          y: Math.round(draftEntity.y),
-          width: Math.max(1, Math.round(Math.abs(draftEntity.width))),
-          height: Math.max(1, Math.round(Math.abs(draftEntity.height))),
-        };
+        const snappedBase =
+          interaction.entitySnapshot.type === "skylight"
+            ? {
+                ...draftEntity,
+                width: Math.max(1, Math.round(Math.abs(draftEntity.width))),
+                height: Math.max(1, Math.round(Math.abs(draftEntity.height))),
+              }
+            : {
+                ...draftEntity,
+                x: Math.round(draftEntity.x),
+                y: Math.round(draftEntity.y),
+                width: Math.max(1, Math.round(Math.abs(draftEntity.width))),
+                height: Math.max(1, Math.round(Math.abs(draftEntity.height))),
+              };
+
+        const snapped =
+          interaction.entitySnapshot.type === "skylight"
+            ? {
+                ...snappedBase,
+                x: snappedBase.x + snappedBase.width / 2,
+                y: snappedBase.y + snappedBase.height / 2,
+              }
+            : snappedBase;
+
+        if (interaction.entitySnapshot.type === "skylight") {
+          const hostRectId = snapped.metadata.hostRectId as string | undefined;
+          const hostRect = hostRectId
+            ? rectangleEntities.find((rectangle) => rectangle.id === hostRectId)
+            : null;
+          if (!hostRect || !isSkylightInsideRectangle(snapped, hostRect)) {
+            dispatch({ type: "CLEAR_PREVIEW_ENTITY" });
+            setDraftEntity(null);
+            return;
+          }
+        }
+
         dispatch({ type: "UPSERT_ENTITY", entity: snapped });
-        dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
+        if (interaction.entitySnapshot.type === "skylight") {
+          dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: snapped.id } });
+          dispatch({ type: "SET_TOOL", tool: "select" });
+        } else {
+          dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
+        }
+        if (interaction.entitySnapshot.type === "rectangle" && !rectangleStickyMode) {
+          dispatch({ type: "SET_TOOL", tool: "select" });
+        }
         dispatch({ type: "CLEAR_PREVIEW_ENTITY" });
         setDraftEntity(null);
       } else {
         dispatch({ type: "CLEAR_PREVIEW_ENTITY" });
         setDraftEntity(null);
         if (interaction.entitySnapshot.type === "skylight") {
-          dispatch({ type: "UPSERT_ENTITY", entity: interaction.entitySnapshot });
-          dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: interaction.entitySnapshot.id } });
+          const hostRectId = interaction.entitySnapshot.metadata.hostRectId as string | undefined;
+          const hostRect = hostRectId
+            ? rectangleEntities.find((rectangle) => rectangle.id === hostRectId)
+            : null;
+          if (hostRect && isSkylightInsideRectangle(interaction.entitySnapshot, hostRect)) {
+            dispatch({ type: "UPSERT_ENTITY", entity: interaction.entitySnapshot });
+            dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: interaction.entitySnapshot.id } });
+            dispatch({ type: "SET_TOOL", tool: "select" });
+          }
         } else if (interaction.sourceRectangleId) {
           dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: interaction.sourceRectangleId } });
         }
@@ -2460,6 +3336,52 @@ export function Workspace() {
       dispatch({ type: "UPSERT_ENTITY", entity: snapped });
       dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: snapped.id } });
       setDraftEntity(null);
+    }
+
+    if (
+      (interaction.type === "resize-rect" ||
+        interaction.type === "resize-window" ||
+        interaction.type === "resize-skylight") &&
+      interaction.targetId &&
+      interaction.entitySnapshot &&
+      state.previewEntity &&
+      state.previewEntity.id === interaction.targetId
+    ) {
+      const nextEntity = state.previewEntity;
+      const snapshot = interaction.entitySnapshot;
+      const changed =
+        nextEntity.x !== snapshot.x ||
+        nextEntity.y !== snapshot.y ||
+        nextEntity.width !== snapshot.width ||
+        nextEntity.height !== snapshot.height;
+      if (changed) {
+        if (
+          interaction.type === "resize-rect" &&
+          interaction.resizeHandle &&
+          snapshot.type === "rectangle" &&
+          nextEntity.type === "rectangle"
+        ) {
+          const pushedRectangles = getConnectedPushForRectangleResize(
+            snapshot,
+            rectBoundsFromEntity(nextEntity),
+            interaction.resizeHandle,
+            floor.entities,
+          );
+
+          if (pushedRectangles.length > 0) {
+            dispatch({
+              type: "APPLY_RECT_RESIZE_WITH_PUSH",
+              entity: nextEntity,
+              pushedRectangles,
+            });
+          } else {
+            dispatch({ type: "UPSERT_ENTITY", entity: nextEntity });
+          }
+        } else {
+          dispatch({ type: "UPSERT_ENTITY", entity: nextEntity });
+        }
+        dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: nextEntity.id } });
+      }
     }
 
     if (
@@ -2489,6 +3411,47 @@ export function Workspace() {
     };
     const factor = event.deltaY > 0 ? 0.92 : 1.08;
     dispatch({ type: "ZOOM_CAMERA", nextZoom: state.camera.zoom * factor, pivot });
+  };
+
+  const centerFrameWorkspace = () => {
+    const workspace = svgRef.current;
+    if (!workspace || !frameTargetBounds) {
+      return;
+    }
+
+    const padding = 4;
+    const width = Math.max(1, frameTargetBounds.maxX - frameTargetBounds.minX + padding * 2);
+    const height = Math.max(1, frameTargetBounds.maxY - frameTargetBounds.minY + padding * 2);
+    const viewportWidth = workspace.clientWidth;
+    const viewportHeight = workspace.clientHeight;
+    const nextZoom = clamp(Math.min(viewportWidth / width, viewportHeight / height), MIN_ZOOM, MAX_ZOOM);
+
+    const centerX = (frameTargetBounds.minX + frameTargetBounds.maxX) / 2;
+    const centerY = (frameTargetBounds.minY + frameTargetBounds.maxY) / 2;
+
+    dispatch({
+      type: "SET_CAMERA",
+      camera: {
+        zoom: nextZoom,
+        x: viewportWidth / 2 - centerX * nextZoom,
+        y: viewportHeight / 2 - centerY * nextZoom,
+      },
+    });
+  };
+
+  const handleZoomSliderChange = (value: number) => {
+    const workspace = svgRef.current;
+    if (!workspace) {
+      return;
+    }
+    dispatch({
+      type: "ZOOM_CAMERA",
+      nextZoom: value,
+      pivot: {
+        x: workspace.clientWidth / 2,
+        y: workspace.clientHeight / 2,
+      },
+    });
   };
 
   const handleEntityDown = (event: ReactPointerEvent<SVGGElement>, entity: MapEntity) => {
@@ -2749,7 +3712,16 @@ export function Workspace() {
         return;
       }
 
+      const hostRectangle = findRectangleContainingPoint(world, rectangleEntities);
+      if (!hostRectangle) {
+        return;
+      }
+
       const nextEntity = createEntityFromTool("skylight", Math.round(world.x), Math.round(world.y));
+      nextEntity.metadata = {
+        ...nextEntity.metadata,
+        hostRectId: hostRectangle.id,
+      };
       interactionRef.current = {
         type: "draw-rect",
         pointerId: event.pointerId,
@@ -2767,6 +3739,26 @@ export function Workspace() {
     if (entity.type === "rectangle" && event.button === 2) {
       event.preventDefault();
       openEditRectangleModal(entity);
+      return;
+    }
+
+    const wasSelected =
+      state.selection.kind === "entity" &&
+      state.selection.id === entity.id;
+
+    if (state.activeTool === "select" && !wasSelected) {
+      const world = getEventWorld(event);
+      interactionRef.current = {
+        type: "pan",
+        pointerId: event.pointerId,
+        pointerType: event.pointerType,
+        startScreen: { x: event.clientX, y: event.clientY },
+        startWorld: world,
+        dragStarted: false,
+        tapAction: "select-entity",
+        targetId: entity.id,
+      };
+      svgRef.current?.setPointerCapture(event.pointerId);
       return;
     }
 
@@ -3074,10 +4066,23 @@ export function Workspace() {
   const renderedTextEntities = previewAdjustedEntities.filter((entity) => entity.type === "text");
   const hideLinearMarkers =
     interactionRef.current.type === "draw-rect" ||
-    (interactionRef.current.type === "resize-rect" && interactionRef.current.entitySnapshot?.type === "rectangle");
+    (interactionRef.current.type === "resize-rect" && interactionRef.current.entitySnapshot?.type === "rectangle") ||
+    (interactionRef.current.type === "drag-entity" && interactionRef.current.entitySnapshot?.type === "rectangle");
+
+  const resizeCueRectangleEntity =
+    state.previewEntity?.type === "rectangle" ? state.previewEntity : selectedRectangleEntity;
+
+  const hideCameraControls =
+    interactionRef.current.type === "draw-rect" && interactionRef.current.entitySnapshot?.type === "rectangle";
+  const showCameraTools = !cameraPanelCollapsed && !hideCameraControls;
 
   return (
     <div className="workspace-wrap">
+      {rectangleStickyMode && (
+        <div className="workspace-sticky-badge" aria-live="polite">
+          STICKY
+        </div>
+      )}
       <svg
         ref={svgRef}
         className="workspace"
@@ -3295,10 +4300,10 @@ export function Workspace() {
                             {selected && (
                               <>
                                 <rect
-                                  x={-doorVisualWidth / 2 - WINDOW_ANCHOR_WIDTH / 2 - 0.22}
-                                  y={-WINDOW_ANCHOR_HEIGHT / 2 - 0.22}
-                                  width={WINDOW_ANCHOR_WIDTH + 0.44}
-                                  height={WINDOW_ANCHOR_HEIGHT + 0.44}
+                                  x={-doorVisualWidth / 2 - WINDOW_ANCHOR_WIDTH / 2 - WINDOW_HANDLE_HIT_SLOP}
+                                  y={-WINDOW_ANCHOR_HEIGHT / 2 - WINDOW_HANDLE_HIT_SLOP}
+                                  width={WINDOW_ANCHOR_WIDTH + WINDOW_HANDLE_HIT_SLOP * 2}
+                                  height={WINDOW_ANCHOR_HEIGHT + WINDOW_HANDLE_HIT_SLOP * 2}
                                   fill="transparent"
                                   onPointerDown={(event) => startWindowResize(event, entity, "start")}
                                 />
@@ -3314,10 +4319,10 @@ export function Workspace() {
                                   pointerEvents="none"
                                 />
                                 <rect
-                                  x={doorVisualWidth / 2 - WINDOW_ANCHOR_WIDTH / 2 - 0.22}
-                                  y={-WINDOW_ANCHOR_HEIGHT / 2 - 0.22}
-                                  width={WINDOW_ANCHOR_WIDTH + 0.44}
-                                  height={WINDOW_ANCHOR_HEIGHT + 0.44}
+                                  x={doorVisualWidth / 2 - WINDOW_ANCHOR_WIDTH / 2 - WINDOW_HANDLE_HIT_SLOP}
+                                  y={-WINDOW_ANCHOR_HEIGHT / 2 - WINDOW_HANDLE_HIT_SLOP}
+                                  width={WINDOW_ANCHOR_WIDTH + WINDOW_HANDLE_HIT_SLOP * 2}
+                                  height={WINDOW_ANCHOR_HEIGHT + WINDOW_HANDLE_HIT_SLOP * 2}
                                   fill="transparent"
                                   onPointerDown={(event) => startWindowResize(event, entity, "end")}
                                 />
@@ -3460,10 +4465,10 @@ export function Workspace() {
                     {selected && (
                       <>
                         <rect
-                          x={-entity.width / 2 - WINDOW_ANCHOR_WIDTH / 2 - 0.22}
-                          y={-WINDOW_ANCHOR_HEIGHT / 2 - 0.22}
-                          width={WINDOW_ANCHOR_WIDTH + 0.44}
-                          height={WINDOW_ANCHOR_HEIGHT + 0.44}
+                          x={-entity.width / 2 - WINDOW_ANCHOR_WIDTH / 2 - WINDOW_HANDLE_HIT_SLOP}
+                          y={-WINDOW_ANCHOR_HEIGHT / 2 - WINDOW_HANDLE_HIT_SLOP}
+                          width={WINDOW_ANCHOR_WIDTH + WINDOW_HANDLE_HIT_SLOP * 2}
+                          height={WINDOW_ANCHOR_HEIGHT + WINDOW_HANDLE_HIT_SLOP * 2}
                           fill="transparent"
                           onPointerDown={(event) => startWindowResize(event, entity, "start")}
                         />
@@ -3486,10 +4491,10 @@ export function Workspace() {
                           pointerEvents="none"
                         />
                         <rect
-                          x={entity.width / 2 - WINDOW_ANCHOR_WIDTH / 2 - 0.22}
-                          y={-WINDOW_ANCHOR_HEIGHT / 2 - 0.22}
-                          width={WINDOW_ANCHOR_WIDTH + 0.44}
-                          height={WINDOW_ANCHOR_HEIGHT + 0.44}
+                          x={entity.width / 2 - WINDOW_ANCHOR_WIDTH / 2 - WINDOW_HANDLE_HIT_SLOP}
+                          y={-WINDOW_ANCHOR_HEIGHT / 2 - WINDOW_HANDLE_HIT_SLOP}
+                          width={WINDOW_ANCHOR_WIDTH + WINDOW_HANDLE_HIT_SLOP * 2}
+                          height={WINDOW_ANCHOR_HEIGHT + WINDOW_HANDLE_HIT_SLOP * 2}
                           fill="transparent"
                           onPointerDown={(event) => startWindowResize(event, entity, "end")}
                         />
@@ -3583,17 +4588,207 @@ export function Workspace() {
                   </g>
                 ) : entity.type === "rectangle" ? (
                   <g>
-                    <rect
-                      x={0}
-                      y={0}
-                      width={Math.max(entity.width, 0.4)}
-                      height={Math.max(entity.height, 0.4)}
-                      rx={0.1}
-                      fill={getRectangleFillColor(entity.metadata.color ?? "Blue")}
-                      stroke={selected ? "#ffe59a" : "#ffffff"}
-                      strokeWidth={selected ? 0.28 : 0.22}
-                      shapeRendering="crispEdges"
-                    />
+                    {(() => {
+                      const width = Math.max(entity.width, 0.4);
+                      const height = Math.max(entity.height, 0.4);
+                      const isUnconditioned = Boolean(entity.metadata.unconditioned);
+                      const strokeColor = selected ? "#ffe59a" : "#ffffff";
+                      const strokeWidth = selected ? 0.28 : 0.22;
+                      const connectedRanges = conditionedConnectedEdgeRanges.carveById.get(entity.id) ?? {
+                        top: [],
+                        right: [],
+                        bottom: [],
+                        left: [],
+                      };
+                      const dashRanges = conditionedConnectedEdgeRanges.dashById.get(entity.id) ?? {
+                        top: [],
+                        right: [],
+                        bottom: [],
+                        left: [],
+                      };
+
+                      const renderHorizontalEdge = (
+                        y: number,
+                        carveRanges: EdgeRange[],
+                        dashRangesForSide: EdgeRange[],
+                        keyPrefix: string,
+                      ) => {
+                        const edgeStart = entity.x;
+                        const edgeEnd = entity.x + width;
+                        const segments: ReactElement[] = [];
+                        let cursor = edgeStart;
+
+                        for (const range of carveRanges) {
+                          const start = Math.max(edgeStart, range.start);
+                          const end = Math.min(edgeEnd, range.end);
+                          if (start > cursor) {
+                            segments.push(
+                              <line
+                                key={`${keyPrefix}-solid-${cursor}-${start}`}
+                                x1={cursor - entity.x}
+                                y1={y}
+                                x2={start - entity.x}
+                                y2={y}
+                                stroke={strokeColor}
+                                strokeWidth={strokeWidth}
+                                shapeRendering="crispEdges"
+                              />,
+                            );
+                          }
+
+                          if (end > start) {
+                            for (const dashRange of dashRangesForSide) {
+                              const dashStart = Math.max(start, dashRange.start);
+                              const dashEnd = Math.min(end, dashRange.end);
+                              if (dashEnd <= dashStart) {
+                                continue;
+                              }
+                              segments.push(
+                                <line
+                                  key={`${keyPrefix}-dash-${dashStart}-${dashEnd}`}
+                                  x1={dashStart - entity.x}
+                                  y1={y}
+                                  x2={dashEnd - entity.x}
+                                  y2={y}
+                                  stroke={strokeColor}
+                                  strokeWidth={strokeWidth}
+                                  strokeDasharray="0.5 0.3"
+                                  strokeDashoffset={getAlignedDashOffset(dashStart)}
+                                  strokeLinecap="butt"
+                                  shapeRendering="geometricPrecision"
+                                />,
+                              );
+                            }
+                            cursor = Math.max(cursor, end);
+                          }
+                        }
+
+                        if (cursor < edgeEnd) {
+                          segments.push(
+                            <line
+                              key={`${keyPrefix}-solid-${cursor}-${edgeEnd}`}
+                              x1={cursor - entity.x}
+                              y1={y}
+                              x2={edgeEnd - entity.x}
+                              y2={y}
+                              stroke={strokeColor}
+                              strokeWidth={strokeWidth}
+                              shapeRendering="crispEdges"
+                            />,
+                          );
+                        }
+
+                        return segments;
+                      };
+
+                      const renderVerticalEdge = (
+                        x: number,
+                        carveRanges: EdgeRange[],
+                        dashRangesForSide: EdgeRange[],
+                        keyPrefix: string,
+                      ) => {
+                        const edgeStart = entity.y;
+                        const edgeEnd = entity.y + height;
+                        const segments: ReactElement[] = [];
+                        let cursor = edgeStart;
+
+                        for (const range of carveRanges) {
+                          const start = Math.max(edgeStart, range.start);
+                          const end = Math.min(edgeEnd, range.end);
+                          if (start > cursor) {
+                            segments.push(
+                              <line
+                                key={`${keyPrefix}-solid-${cursor}-${start}`}
+                                x1={x}
+                                y1={cursor - entity.y}
+                                x2={x}
+                                y2={start - entity.y}
+                                stroke={strokeColor}
+                                strokeWidth={strokeWidth}
+                                shapeRendering="crispEdges"
+                              />,
+                            );
+                          }
+                          if (end > start) {
+                            for (const dashRange of dashRangesForSide) {
+                              const dashStart = Math.max(start, dashRange.start);
+                              const dashEnd = Math.min(end, dashRange.end);
+                              if (dashEnd <= dashStart) {
+                                continue;
+                              }
+                              segments.push(
+                                <line
+                                  key={`${keyPrefix}-dash-${dashStart}-${dashEnd}`}
+                                  x1={x}
+                                  y1={dashStart - entity.y}
+                                  x2={x}
+                                  y2={dashEnd - entity.y}
+                                  stroke={strokeColor}
+                                  strokeWidth={strokeWidth}
+                                  strokeDasharray="0.5 0.3"
+                                  strokeDashoffset={getAlignedDashOffset(dashStart)}
+                                  strokeLinecap="butt"
+                                  shapeRendering="geometricPrecision"
+                                />,
+                              );
+                            }
+                            cursor = Math.max(cursor, end);
+                          }
+                        }
+
+                        if (cursor < edgeEnd) {
+                          segments.push(
+                            <line
+                              key={`${keyPrefix}-solid-${cursor}-${edgeEnd}`}
+                              x1={x}
+                              y1={cursor - entity.y}
+                              x2={x}
+                              y2={edgeEnd - entity.y}
+                              stroke={strokeColor}
+                              strokeWidth={strokeWidth}
+                              shapeRendering="crispEdges"
+                            />,
+                          );
+                        }
+
+                        return segments;
+                      };
+
+                      return (
+                        <>
+                          <rect
+                            x={0}
+                            y={0}
+                            width={width}
+                            height={height}
+                            rx={0.1}
+                            fill={getRectangleFillColor(entity.metadata.color ?? "Blue")}
+                            stroke="none"
+                            shapeRendering="crispEdges"
+                          />
+                          {isUnconditioned ? (
+                            <rect
+                              x={0}
+                              y={0}
+                              width={width}
+                              height={height}
+                              rx={0.1}
+                              fill="none"
+                              stroke={strokeColor}
+                              strokeWidth={strokeWidth}
+                              shapeRendering="crispEdges"
+                            />
+                          ) : (
+                            <g pointerEvents="none">
+                              {renderHorizontalEdge(0, connectedRanges.top, dashRanges.top, `${entity.id}-top`)}
+                              {renderHorizontalEdge(height, connectedRanges.bottom, dashRanges.bottom, `${entity.id}-bottom`)}
+                              {renderVerticalEdge(0, connectedRanges.left, dashRanges.left, `${entity.id}-left`)}
+                              {renderVerticalEdge(width, connectedRanges.right, dashRanges.right, `${entity.id}-right`)}
+                            </g>
+                          )}
+                        </>
+                      );
+                    })()}
                     {Boolean(entity.metadata.unconditioned) && (
                       <rect
                         x={0}
@@ -3620,7 +4815,9 @@ export function Workspace() {
                   />
                 )}
 
-                {entity.type === "rectangle" && <RectangleCeilingOverlay entity={entity} />}
+                {entity.type === "rectangle" && sharedCeilingOverlayPlacement.visibleIds.has(entity.id) && (
+                  <RectangleCeilingOverlay entity={entity} anchor={sharedCeilingOverlayPlacement.anchorById.get(entity.id)} />
+                )}
 
                 {entity.label && entity.type !== "text" && entity.type !== "rectangle" && !isUtilityEntityType(entity.type) && (
                   <text
@@ -3718,9 +4915,22 @@ export function Workspace() {
               />
             )}
 
+          {draftEntity?.type === "skylight" &&
+            interactionRef.current.type === "draw-rect" &&
+            interactionRef.current.dragStarted && (
+              <RectangleDragSizeCue
+                rect={{
+                  x: draftEntity.x,
+                  y: draftEntity.y,
+                  width: Math.abs(draftEntity.width),
+                  height: Math.abs(draftEntity.height),
+                }}
+              />
+            )}
+
           {interactionRef.current.type === "resize-rect" &&
             interactionRef.current.entitySnapshot?.type === "rectangle" &&
-            selectedRectangleEntity && <RectangleDragSizeCue rect={rectBoundsFromEntity(selectedRectangleEntity)} />}
+            resizeCueRectangleEntity && <RectangleDragSizeCue rect={rectBoundsFromEntity(resizeCueRectangleEntity)} />}
 
           {selectedRectangleEntity && (() => {
             const rect = rectBoundsFromEntity(selectedRectangleEntity);
@@ -3745,7 +4955,7 @@ export function Workspace() {
                   x2={x2}
                   y2={y1}
                   stroke="transparent"
-                  strokeWidth={1.1}
+                  strokeWidth={1.6}
                   style={{ cursor: "ns-resize" }}
                   onPointerDown={(event) => startRectangleResize(event, selectedRectangleEntity, "n")}
                 />
@@ -3755,7 +4965,7 @@ export function Workspace() {
                   x2={x2}
                   y2={y2}
                   stroke="transparent"
-                  strokeWidth={1.1}
+                  strokeWidth={1.6}
                   style={{ cursor: "ns-resize" }}
                   onPointerDown={(event) => startRectangleResize(event, selectedRectangleEntity, "s")}
                 />
@@ -3765,7 +4975,7 @@ export function Workspace() {
                   x2={x1}
                   y2={y2}
                   stroke="transparent"
-                  strokeWidth={1.1}
+                  strokeWidth={1.6}
                   style={{ cursor: "ew-resize" }}
                   onPointerDown={(event) => startRectangleResize(event, selectedRectangleEntity, "w")}
                 />
@@ -3775,7 +4985,7 @@ export function Workspace() {
                   x2={x2}
                   y2={y2}
                   stroke="transparent"
-                  strokeWidth={1.1}
+                  strokeWidth={1.6}
                   style={{ cursor: "ew-resize" }}
                   onPointerDown={(event) => startRectangleResize(event, selectedRectangleEntity, "e")}
                 />
@@ -3790,7 +5000,7 @@ export function Workspace() {
                     <circle
                       cx={anchor.x}
                       cy={anchor.y}
-                      r={0.58}
+                      r={0.78}
                       fill="transparent"
                       style={{ cursor: anchor.cursor }}
                       onPointerDown={(event) => startRectangleResize(event, selectedRectangleEntity, anchor.handle)}
@@ -3798,7 +5008,7 @@ export function Workspace() {
                     <circle
                       cx={anchor.x}
                       cy={anchor.y}
-                      r={0.26}
+                      r={0.3}
                       fill="#ffffff"
                       stroke="#4f6862"
                       strokeWidth={0.06}
@@ -3965,6 +5175,79 @@ export function Workspace() {
         </g>
       </svg>
 
+      <div className={`workspace-camera-controls ${showCameraTools ? "" : "is-collapsed"}`} aria-label="Workspace camera controls">
+        {showCameraTools && (
+          <>
+            <div className="workspace-zoom-slider-wrap">
+              <input
+                type="range"
+                min={MIN_ZOOM}
+                max={MAX_ZOOM}
+                step={0.01}
+                value={state.camera.zoom}
+                onChange={(event) => handleZoomSliderChange(Number(event.target.value))}
+                className="workspace-zoom-slider"
+                aria-label="Zoom"
+              />
+            </div>
+
+            <button
+              type="button"
+              className="workspace-frame-btn"
+              onClick={centerFrameWorkspace}
+              title="Frame workspace"
+              aria-label="Frame workspace"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5M8 8l8 8M16 8l-8 8"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.9"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          </>
+        )}
+
+        <button
+          type="button"
+          className="workspace-eye-btn"
+          onClick={() => setCameraPanelCollapsed((current) => !current)}
+          title={showCameraTools ? "Hide zoom tools" : "Show zoom tools"}
+          aria-label={showCameraTools ? "Hide zoom tools" : "Show zoom tools"}
+        >
+          {showCameraTools ? (
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M2.5 12s3.4-6 9.5-6 9.5 6 9.5 6-3.4 6-9.5 6-9.5-6-9.5-6z"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="1.8" />
+            </svg>
+          ) : (
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M2.5 12s3.4-6 9.5-6 9.5 6 9.5 6-3.4 6-9.5 6-9.5-6-9.5-6z"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="1.8" />
+              <line x1="5" y1="19" x2="19" y2="5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            </svg>
+          )}
+        </button>
+      </div>
+
       <RectangleModal
         isOpen={rectangleModalState !== null}
         initialValues={rectangleModalState?.initialValues ?? DEFAULT_RECTANGLE_MODAL_VALUES}
@@ -4015,6 +5298,9 @@ export function Workspace() {
 
           dispatch({ type: "UPSERT_ENTITY", entity: rectangle });
           dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
+          if (!rectangleStickyMode) {
+            dispatch({ type: "SET_TOOL", tool: "select" });
+          }
           setRectangleModalState(null);
         }}
       />

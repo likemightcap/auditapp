@@ -30,6 +30,21 @@ function normalizeRectangleColor(value: string): string {
   return COLORS.includes(normalized as (typeof COLORS)[number]) ? normalized : "BLUE";
 }
 
+function defaultRectangleColorForOptions(unconditioned: boolean, ceilingType: CeilingType): string {
+  if (unconditioned) {
+    return "RED";
+  }
+  if (
+    ceilingType === "cathedral" ||
+    ceilingType === "cathedral-horizontal" ||
+    ceilingType === "sloped" ||
+    ceilingType === "sloped-horizontal"
+  ) {
+    return "YELLOW";
+  }
+  return "BLUE";
+}
+
 function colorCellStyles(color: string): CSSProperties {
   switch (color.toUpperCase()) {
     case "BLUE":
@@ -92,6 +107,7 @@ export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: Re
   const [standardHeightFt, setStandardHeightFt] = useState(8);
   const [lowHeightFt, setLowHeightFt] = useState(8);
   const [highHeightFt, setHighHeightFt] = useState(12);
+  const [colorManuallySet, setColorManuallySet] = useState(false);
 
   useEffect(() => {
     if (!isOpen) {
@@ -105,6 +121,7 @@ export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: Re
     setStandardHeightFt(clampToPositiveInt(initialValues.standardHeightFt));
     setLowHeightFt(clampToPositiveInt(initialValues.lowHeightFt));
     setHighHeightFt(clampToPositiveInt(initialValues.highHeightFt));
+    setColorManuallySet(false);
   }, [initialValues, isOpen]);
 
   const canSubmit = useMemo(() => {
@@ -144,7 +161,14 @@ export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: Re
 
         <div className="modal-row">
           <label>COLOR:</label>
-          <select value={color} style={colorCellStyles(color)} onChange={(event) => setColor(event.target.value)}>
+          <select
+            value={color}
+            style={colorCellStyles(color)}
+            onChange={(event) => {
+              setColor(event.target.value);
+              setColorManuallySet(true);
+            }}
+          >
             {COLORS.map((item) => (
               <option key={item} value={item}>
                 {item}
@@ -170,7 +194,13 @@ export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: Re
               id="rectUnconditioned"
               type="checkbox"
               checked={unconditioned}
-              onChange={(event) => setUnconditioned(event.target.checked)}
+              onChange={(event) => {
+                const nextUnconditioned = event.target.checked;
+                setUnconditioned(nextUnconditioned);
+                if (!colorManuallySet) {
+                  setColor(defaultRectangleColorForOptions(nextUnconditioned, ceilingType));
+                }
+              }}
             />
             <span>Exclude from area and volume</span>
           </label>
@@ -178,7 +208,16 @@ export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: Re
 
         <div className="modal-row ceiling-row">
           <label>CEILING TYPE:</label>
-          <select value={ceilingType} onChange={(event) => setCeilingType(event.target.value as CeilingType)}>
+          <select
+            value={ceilingType}
+            onChange={(event) => {
+              const nextCeilingType = event.target.value as CeilingType;
+              setCeilingType(nextCeilingType);
+              if (!colorManuallySet) {
+                setColor(defaultRectangleColorForOptions(unconditioned, nextCeilingType));
+              }
+            }}
+          >
             <option value="none">NO CEILING</option>
             <option value="standard">STANDARD</option>
             <option value="cathedral">CATHEDRAL (VERTICAL)</option>

@@ -99,6 +99,7 @@ export interface EditorState {
 
 export type EditorAction =
   | { type: "SET_TOOL"; tool: ToolId }
+  | { type: "SET_RECTANGLE_STICKY_MODE"; enabled: boolean }
   | { type: "SET_SELECTION"; selection: Selection }
   | { type: "SET_CAMERA"; camera: Partial<CameraState> }
   | { type: "PAN_CAMERA"; dx: number; dy: number }
@@ -117,6 +118,11 @@ export type EditorAction =
   | { type: "UPDATE_LEVEL"; floorId: string; name: string; unconditioned: boolean }
   | { type: "DUPLICATE_LEVEL_RECTANGLES"; floorId: string; floorName: string; unconditioned: boolean }
   | { type: "UPSERT_ENTITY"; entity: MapEntity }
+  | {
+      type: "APPLY_RECT_RESIZE_WITH_PUSH";
+      entity: MapEntity;
+      pushedRectangles: Array<{ id: string; x: number; y: number }>;
+    }
   | { type: "REMOVE_ENTITY"; entityId: string }
   | { type: "MOVE_ENTITY"; entityId: string; x: number; y: number }
   | { type: "ROTATE_ENTITY"; entityId: string; rotation: number }
