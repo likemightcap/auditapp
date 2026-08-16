@@ -2037,6 +2037,8 @@ export function Workspace() {
   const { state, dispatch } = useEditor();
   const floor = getFloor(state);
   const rectangleStickyMode = Boolean(state.project.metadata.rectangleStickyMode);
+  const isCoarsePointer =
+    typeof window !== "undefined" && window.matchMedia("(hover: none) and (pointer: coarse)").matches;
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const initializedViewRef = useRef(false);
@@ -4692,7 +4694,9 @@ export function Workspace() {
                       const height = Math.max(entity.height, 0.4);
                       const isUnconditioned = Boolean(entity.metadata.unconditioned);
                       const strokeColor = selected ? "#ffe59a" : "#ffffff";
-                      const strokeWidth = selected ? 0.2 : 0.16;
+                      const strokeWidth = selected
+                        ? (isCoarsePointer ? 0.22 : 0.28)
+                        : (isCoarsePointer ? 0.16 : 0.22);
                       const connectedRanges = conditionedConnectedEdgeRanges.carveById.get(entity.id) ?? {
                         top: [],
                         right: [],
@@ -4730,8 +4734,7 @@ export function Workspace() {
                                 y2={y}
                                 stroke={strokeColor}
                                 strokeWidth={strokeWidth}
-                                vectorEffect="non-scaling-stroke"
-                                shapeRendering="geometricPrecision"
+                                shapeRendering="crispEdges"
                               />,
                             );
                           }
@@ -4755,7 +4758,6 @@ export function Workspace() {
                                   strokeDasharray="0.5 0.3"
                                   strokeDashoffset={getAlignedDashOffset(dashStart)}
                                   strokeLinecap="butt"
-                                  vectorEffect="non-scaling-stroke"
                                   shapeRendering="geometricPrecision"
                                 />,
                               );
@@ -4774,8 +4776,7 @@ export function Workspace() {
                               y2={y}
                               stroke={strokeColor}
                               strokeWidth={strokeWidth}
-                              vectorEffect="non-scaling-stroke"
-                                shapeRendering="geometricPrecision"
+                                shapeRendering="crispEdges"
                             />,
                           );
                         }
@@ -4807,8 +4808,7 @@ export function Workspace() {
                                 y2={start - entity.y}
                                 stroke={strokeColor}
                                 strokeWidth={strokeWidth}
-                                vectorEffect="non-scaling-stroke"
-                                shapeRendering="geometricPrecision"
+                                shapeRendering="crispEdges"
                               />,
                             );
                           }
@@ -4831,7 +4831,6 @@ export function Workspace() {
                                   strokeDasharray="0.5 0.3"
                                   strokeDashoffset={getAlignedDashOffset(dashStart)}
                                   strokeLinecap="butt"
-                                  vectorEffect="non-scaling-stroke"
                                   shapeRendering="geometricPrecision"
                                 />,
                               );
@@ -4850,8 +4849,7 @@ export function Workspace() {
                               y2={edgeEnd - entity.y}
                               stroke={strokeColor}
                               strokeWidth={strokeWidth}
-                              vectorEffect="non-scaling-stroke"
-                                shapeRendering="geometricPrecision"
+                                shapeRendering="crispEdges"
                             />,
                           );
                         }
@@ -4869,7 +4867,7 @@ export function Workspace() {
                             rx={0.1}
                             fill={getRectangleFillColor(entity.metadata.color ?? "Blue")}
                             stroke="none"
-                            shapeRendering="geometricPrecision"
+                            shapeRendering="crispEdges"
                           />
                           {isUnconditioned ? (
                             <rect
@@ -4881,8 +4879,7 @@ export function Workspace() {
                               fill="none"
                               stroke={strokeColor}
                               strokeWidth={strokeWidth}
-                              vectorEffect="non-scaling-stroke"
-                              shapeRendering="geometricPrecision"
+                              shapeRendering="crispEdges"
                             />
                           ) : (
                             <g pointerEvents="none">
@@ -4890,41 +4887,33 @@ export function Workspace() {
                               {renderHorizontalEdge(height, connectedRanges.bottom, dashRanges.bottom, `${entity.id}-bottom`)}
                               {renderVerticalEdge(0, connectedRanges.left, dashRanges.left, `${entity.id}-left`)}
                               {renderVerticalEdge(width, connectedRanges.right, dashRanges.right, `${entity.id}-right`)}
-                              <circle
-                                cx={0}
-                                cy={0}
-                                r={0}
-                                fill="none"
-                                stroke={strokeColor}
-                                strokeWidth={strokeWidth}
-                                vectorEffect="non-scaling-stroke"
+                              <rect
+                                x={-strokeWidth / 2}
+                                y={-strokeWidth / 2}
+                                width={strokeWidth}
+                                height={strokeWidth}
+                                fill={strokeColor}
                               />
-                              <circle
-                                cx={width}
-                                cy={0}
-                                r={0}
-                                fill="none"
-                                stroke={strokeColor}
-                                strokeWidth={strokeWidth}
-                                vectorEffect="non-scaling-stroke"
+                              <rect
+                                x={width - strokeWidth / 2}
+                                y={-strokeWidth / 2}
+                                width={strokeWidth}
+                                height={strokeWidth}
+                                fill={strokeColor}
                               />
-                              <circle
-                                cx={0}
-                                cy={height}
-                                r={0}
-                                fill="none"
-                                stroke={strokeColor}
-                                strokeWidth={strokeWidth}
-                                vectorEffect="non-scaling-stroke"
+                              <rect
+                                x={-strokeWidth / 2}
+                                y={height - strokeWidth / 2}
+                                width={strokeWidth}
+                                height={strokeWidth}
+                                fill={strokeColor}
                               />
-                              <circle
-                                cx={width}
-                                cy={height}
-                                r={0}
-                                fill="none"
-                                stroke={strokeColor}
-                                strokeWidth={strokeWidth}
-                                vectorEffect="non-scaling-stroke"
+                              <rect
+                                x={width - strokeWidth / 2}
+                                y={height - strokeWidth / 2}
+                                width={strokeWidth}
+                                height={strokeWidth}
+                                fill={strokeColor}
                               />
                             </g>
                           )}

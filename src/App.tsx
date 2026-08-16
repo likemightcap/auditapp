@@ -153,6 +153,46 @@ function EditorShell() {
     return () => shell.removeEventListener("selectstart", onSelectStart);
   }, []);
 
+  useEffect(() => {
+    const isCoarsePointer = window.matchMedia("(hover: none) and (pointer: coarse)").matches;
+    const isSmallViewport = window.matchMedia("(max-width: 1366px)").matches;
+    if (!isCoarsePointer || !isSmallViewport) {
+      return;
+    }
+
+    const orientationApi = screen.orientation as (ScreenOrientation & {
+      lock?: (orientation: OrientationLockType) => Promise<void>;
+    }) | null;
+
+    const attemptLandscapeLock = () => {
+      orientationApi?.lock?.("landscape").catch(() => {
+        // Some browsers only allow locking under specific contexts/user gestures.
+      });
+    };
+
+    attemptLandscapeLock();
+
+    const onResize = () => attemptLandscapeLock();
+    const onVisibilityChange = () => {
+      if (!document.hidden) {
+        attemptLandscapeLock();
+      }
+    };
+    const onPointerDown = () => attemptLandscapeLock();
+
+    window.addEventListener("resize", onResize);
+    window.addEventListener("orientationchange", onResize);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    document.addEventListener("pointerdown", onPointerDown, { passive: true });
+
+    return () => {
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("orientationchange", onResize);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, []);
+
   const clearSelectionOnAppPress = (event: React.PointerEvent<HTMLDivElement>) => {
     if (state.selection.kind !== "entity") {
       return;
