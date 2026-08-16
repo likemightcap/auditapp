@@ -2037,8 +2037,6 @@ export function Workspace() {
   const { state, dispatch } = useEditor();
   const floor = getFloor(state);
   const rectangleStickyMode = Boolean(state.project.metadata.rectangleStickyMode);
-  const isCoarsePointer =
-    typeof window !== "undefined" && window.matchMedia("(hover: none) and (pointer: coarse)").matches;
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const initializedViewRef = useRef(false);
@@ -4694,9 +4692,9 @@ export function Workspace() {
                       const height = Math.max(entity.height, 0.4);
                       const isUnconditioned = Boolean(entity.metadata.unconditioned);
                       const strokeColor = selected ? "#ffe59a" : "#ffffff";
-                      const strokeWidth = selected
-                        ? (isCoarsePointer ? 0.22 : 0.28)
-                        : (isCoarsePointer ? 0.16 : 0.22);
+                      const strokeWidth = selected ? 0.28 : 0.22;
+                      const strokeMaskId = `rect-stroke-mask-${entity.id}`;
+                      const cutStrokeWidth = strokeWidth + 0.08;
                       const connectedRanges = conditionedConnectedEdgeRanges.carveById.get(entity.id) ?? {
                         top: [],
                         right: [],
@@ -4710,73 +4708,35 @@ export function Workspace() {
                         left: [],
                       };
 
-                      const renderHorizontalEdge = (
+                      const renderHorizontalRangeLines = (
                         y: number,
-                        carveRanges: EdgeRange[],
-                        dashRangesForSide: EdgeRange[],
+                        ranges: EdgeRange[],
                         keyPrefix: string,
+                        options?: { dashed?: boolean; stroke?: string; strokeWidth?: number; shapeRendering?: "crispEdges" | "geometricPrecision" },
                       ) => {
                         const edgeStart = entity.x;
                         const edgeEnd = entity.x + width;
                         const segments: ReactElement[] = [];
-                        let cursor = edgeStart;
 
-                        for (const range of carveRanges) {
+                        for (const range of ranges) {
                           const start = Math.max(edgeStart, range.start);
                           const end = Math.min(edgeEnd, range.end);
-                          if (start > cursor) {
-                            segments.push(
-                              <line
-                                key={`${keyPrefix}-solid-${cursor}-${start}`}
-                                x1={cursor - entity.x}
-                                y1={y}
-                                x2={start - entity.x}
-                                y2={y}
-                                stroke={strokeColor}
-                                strokeWidth={strokeWidth}
-                                shapeRendering="crispEdges"
-                              />,
-                            );
+                          if (end <= start) {
+                            continue;
                           }
-
-                          if (end > start) {
-                            for (const dashRange of dashRangesForSide) {
-                              const dashStart = Math.max(start, dashRange.start);
-                              const dashEnd = Math.min(end, dashRange.end);
-                              if (dashEnd <= dashStart) {
-                                continue;
-                              }
-                              segments.push(
-                                <line
-                                  key={`${keyPrefix}-dash-${dashStart}-${dashEnd}`}
-                                  x1={dashStart - entity.x}
-                                  y1={y}
-                                  x2={dashEnd - entity.x}
-                                  y2={y}
-                                  stroke={strokeColor}
-                                  strokeWidth={strokeWidth}
-                                  strokeDasharray="0.5 0.3"
-                                  strokeDashoffset={getAlignedDashOffset(dashStart)}
-                                  strokeLinecap="butt"
-                                  shapeRendering="geometricPrecision"
-                                />,
-                              );
-                            }
-                            cursor = Math.max(cursor, end);
-                          }
-                        }
-
-                        if (cursor < edgeEnd) {
                           segments.push(
                             <line
-                              key={`${keyPrefix}-solid-${cursor}-${edgeEnd}`}
-                              x1={cursor - entity.x}
+                              key={`${keyPrefix}-${start}-${end}`}
+                              x1={start - entity.x}
                               y1={y}
-                              x2={edgeEnd - entity.x}
+                              x2={end - entity.x}
                               y2={y}
-                              stroke={strokeColor}
-                              strokeWidth={strokeWidth}
-                                shapeRendering="crispEdges"
+                              stroke={options?.stroke ?? strokeColor}
+                              strokeWidth={options?.strokeWidth ?? strokeWidth}
+                              strokeDasharray={options?.dashed ? "0.5 0.3" : undefined}
+                              strokeDashoffset={options?.dashed ? getAlignedDashOffset(start) : undefined}
+                              strokeLinecap="butt"
+                              shapeRendering={options?.shapeRendering ?? "geometricPrecision"}
                             />,
                           );
                         }
@@ -4784,72 +4744,35 @@ export function Workspace() {
                         return segments;
                       };
 
-                      const renderVerticalEdge = (
+                      const renderVerticalRangeLines = (
                         x: number,
-                        carveRanges: EdgeRange[],
-                        dashRangesForSide: EdgeRange[],
+                        ranges: EdgeRange[],
                         keyPrefix: string,
+                        options?: { dashed?: boolean; stroke?: string; strokeWidth?: number; shapeRendering?: "crispEdges" | "geometricPrecision" },
                       ) => {
                         const edgeStart = entity.y;
                         const edgeEnd = entity.y + height;
                         const segments: ReactElement[] = [];
-                        let cursor = edgeStart;
 
-                        for (const range of carveRanges) {
+                        for (const range of ranges) {
                           const start = Math.max(edgeStart, range.start);
                           const end = Math.min(edgeEnd, range.end);
-                          if (start > cursor) {
-                            segments.push(
-                              <line
-                                key={`${keyPrefix}-solid-${cursor}-${start}`}
-                                x1={x}
-                                y1={cursor - entity.y}
-                                x2={x}
-                                y2={start - entity.y}
-                                stroke={strokeColor}
-                                strokeWidth={strokeWidth}
-                                shapeRendering="crispEdges"
-                              />,
-                            );
+                          if (end <= start) {
+                            continue;
                           }
-                          if (end > start) {
-                            for (const dashRange of dashRangesForSide) {
-                              const dashStart = Math.max(start, dashRange.start);
-                              const dashEnd = Math.min(end, dashRange.end);
-                              if (dashEnd <= dashStart) {
-                                continue;
-                              }
-                              segments.push(
-                                <line
-                                  key={`${keyPrefix}-dash-${dashStart}-${dashEnd}`}
-                                  x1={x}
-                                  y1={dashStart - entity.y}
-                                  x2={x}
-                                  y2={dashEnd - entity.y}
-                                  stroke={strokeColor}
-                                  strokeWidth={strokeWidth}
-                                  strokeDasharray="0.5 0.3"
-                                  strokeDashoffset={getAlignedDashOffset(dashStart)}
-                                  strokeLinecap="butt"
-                                  shapeRendering="geometricPrecision"
-                                />,
-                              );
-                            }
-                            cursor = Math.max(cursor, end);
-                          }
-                        }
-
-                        if (cursor < edgeEnd) {
                           segments.push(
                             <line
-                              key={`${keyPrefix}-solid-${cursor}-${edgeEnd}`}
+                              key={`${keyPrefix}-${start}-${end}`}
                               x1={x}
-                              y1={cursor - entity.y}
+                              y1={start - entity.y}
                               x2={x}
-                              y2={edgeEnd - entity.y}
-                              stroke={strokeColor}
-                              strokeWidth={strokeWidth}
-                                shapeRendering="crispEdges"
+                              y2={end - entity.y}
+                              stroke={options?.stroke ?? strokeColor}
+                              strokeWidth={options?.strokeWidth ?? strokeWidth}
+                              strokeDasharray={options?.dashed ? "0.5 0.3" : undefined}
+                              strokeDashoffset={options?.dashed ? getAlignedDashOffset(start) : undefined}
+                              strokeLinecap="butt"
+                              shapeRendering={options?.shapeRendering ?? "geometricPrecision"}
                             />,
                           );
                         }
@@ -4866,55 +4789,51 @@ export function Workspace() {
                             height={height}
                             rx={0.1}
                             fill={getRectangleFillColor(entity.metadata.color ?? "Blue")}
-                            stroke="none"
                             shapeRendering="crispEdges"
                           />
-                          {isUnconditioned ? (
-                            <rect
-                              x={0}
-                              y={0}
-                              width={width}
-                              height={height}
-                              rx={0.1}
-                              fill="none"
-                              stroke={strokeColor}
-                              strokeWidth={strokeWidth}
-                              shapeRendering="crispEdges"
-                            />
-                          ) : (
+                          {!isUnconditioned && (
+                            <mask id={strokeMaskId} maskUnits="userSpaceOnUse" x={-1} y={-1} width={width + 2} height={height + 2}>
+                              <rect x={-1} y={-1} width={width + 2} height={height + 2} fill="#ffffff" />
+                              {renderHorizontalRangeLines(0, connectedRanges.top, `${entity.id}-cut-top`, {
+                                stroke: "#000000",
+                                strokeWidth: cutStrokeWidth,
+                                shapeRendering: "crispEdges",
+                              })}
+                              {renderHorizontalRangeLines(height, connectedRanges.bottom, `${entity.id}-cut-bottom`, {
+                                stroke: "#000000",
+                                strokeWidth: cutStrokeWidth,
+                                shapeRendering: "crispEdges",
+                              })}
+                              {renderVerticalRangeLines(0, connectedRanges.left, `${entity.id}-cut-left`, {
+                                stroke: "#000000",
+                                strokeWidth: cutStrokeWidth,
+                                shapeRendering: "crispEdges",
+                              })}
+                              {renderVerticalRangeLines(width, connectedRanges.right, `${entity.id}-cut-right`, {
+                                stroke: "#000000",
+                                strokeWidth: cutStrokeWidth,
+                                shapeRendering: "crispEdges",
+                              })}
+                            </mask>
+                          )}
+                          <rect
+                            x={0}
+                            y={0}
+                            width={width}
+                            height={height}
+                            rx={0.1}
+                            fill="none"
+                            stroke={strokeColor}
+                            strokeWidth={strokeWidth}
+                            shapeRendering="crispEdges"
+                            mask={!isUnconditioned ? `url(#${strokeMaskId})` : undefined}
+                          />
+                          {!isUnconditioned && (
                             <g pointerEvents="none">
-                              {renderHorizontalEdge(0, connectedRanges.top, dashRanges.top, `${entity.id}-top`)}
-                              {renderHorizontalEdge(height, connectedRanges.bottom, dashRanges.bottom, `${entity.id}-bottom`)}
-                              {renderVerticalEdge(0, connectedRanges.left, dashRanges.left, `${entity.id}-left`)}
-                              {renderVerticalEdge(width, connectedRanges.right, dashRanges.right, `${entity.id}-right`)}
-                              <rect
-                                x={-strokeWidth / 2}
-                                y={-strokeWidth / 2}
-                                width={strokeWidth}
-                                height={strokeWidth}
-                                fill={strokeColor}
-                              />
-                              <rect
-                                x={width - strokeWidth / 2}
-                                y={-strokeWidth / 2}
-                                width={strokeWidth}
-                                height={strokeWidth}
-                                fill={strokeColor}
-                              />
-                              <rect
-                                x={-strokeWidth / 2}
-                                y={height - strokeWidth / 2}
-                                width={strokeWidth}
-                                height={strokeWidth}
-                                fill={strokeColor}
-                              />
-                              <rect
-                                x={width - strokeWidth / 2}
-                                y={height - strokeWidth / 2}
-                                width={strokeWidth}
-                                height={strokeWidth}
-                                fill={strokeColor}
-                              />
+                              {renderHorizontalRangeLines(0, dashRanges.top, `${entity.id}-dash-top`, { dashed: true })}
+                              {renderHorizontalRangeLines(height, dashRanges.bottom, `${entity.id}-dash-bottom`, { dashed: true })}
+                              {renderVerticalRangeLines(0, dashRanges.left, `${entity.id}-dash-left`, { dashed: true })}
+                              {renderVerticalRangeLines(width, dashRanges.right, `${entity.id}-dash-right`, { dashed: true })}
                             </g>
                           )}
                         </>

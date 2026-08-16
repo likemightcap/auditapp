@@ -160,6 +160,14 @@ function EditorShell() {
       return;
     }
 
+    const body = document.body;
+    const portraitQuery = window.matchMedia("(orientation: portrait)");
+
+    const applyForcedLandscapeClasses = () => {
+      body.classList.add("force-landscape-device");
+      body.classList.toggle("force-landscape-portrait", portraitQuery.matches);
+    };
+
     const orientationApi = screen.orientation as (ScreenOrientation & {
       lock?: (orientation: OrientationLockType) => Promise<void>;
     }) | null;
@@ -170,11 +178,16 @@ function EditorShell() {
       });
     };
 
+    applyForcedLandscapeClasses();
     attemptLandscapeLock();
 
-    const onResize = () => attemptLandscapeLock();
+    const onResize = () => {
+      applyForcedLandscapeClasses();
+      attemptLandscapeLock();
+    };
     const onVisibilityChange = () => {
       if (!document.hidden) {
+        applyForcedLandscapeClasses();
         attemptLandscapeLock();
       }
     };
@@ -184,12 +197,15 @@ function EditorShell() {
     window.addEventListener("orientationchange", onResize);
     document.addEventListener("visibilitychange", onVisibilityChange);
     document.addEventListener("pointerdown", onPointerDown, { passive: true });
+    portraitQuery.addEventListener("change", onResize);
 
     return () => {
+      body.classList.remove("force-landscape-device", "force-landscape-portrait");
       window.removeEventListener("resize", onResize);
       window.removeEventListener("orientationchange", onResize);
       document.removeEventListener("visibilitychange", onVisibilityChange);
       document.removeEventListener("pointerdown", onPointerDown);
+      portraitQuery.removeEventListener("change", onResize);
     };
   }, []);
 

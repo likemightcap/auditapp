@@ -47,6 +47,20 @@ body {
   overscroll-behavior: none;
 }
 
+body.force-landscape-device {
+  overflow: hidden;
+}
+
+body.force-landscape-device.force-landscape-portrait #root {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vh;
+  height: 100vw;
+  transform-origin: top left;
+  transform: rotate(90deg) translateY(-100%);
+}
+
 button,
 input {
   font: inherit;
