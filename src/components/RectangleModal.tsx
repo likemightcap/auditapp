@@ -4,6 +4,7 @@ import type { CSSProperties } from "react";
 export type CeilingType = "standard" | "cathedral" | "cathedral-horizontal" | "sloped" | "sloped-horizontal" | "none";
 
 export interface RectangleModalSubmit {
+  label: string;
   widthFt: number;
   heightFt: number;
   color: string;
@@ -99,6 +100,7 @@ function StepperField({
 }
 
 export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: RectangleModalProps) {
+  const [label, setLabel] = useState("");
   const [color, setColor] = useState("BLUE");
   const [widthFt, setWidthFt] = useState(12);
   const [heightFt, setHeightFt] = useState(12);
@@ -113,6 +115,7 @@ export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: Re
     if (!isOpen) {
       return;
     }
+    setLabel(initialValues.label ?? "");
     setColor(normalizeRectangleColor(initialValues.color));
     setWidthFt(clampToPositiveInt(initialValues.widthFt));
     setHeightFt(clampToPositiveInt(initialValues.heightFt));
@@ -158,6 +161,16 @@ export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: Re
     <div className="modal-backdrop" onPointerDown={onCancel}>
       <section className="rectangle-modal" onPointerDown={(event) => event.stopPropagation()}>
         <h2>RECTANGLE</h2>
+
+        <div className="modal-row">
+          <label>LABEL:</label>
+          <input
+            type="text"
+            value={label}
+            onChange={(event) => setLabel(event.target.value)}
+            placeholder="Optional"
+          />
+        </div>
 
         <div className="modal-row">
           <label>COLOR:</label>
@@ -252,6 +265,7 @@ export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: Re
             disabled={!canSubmit}
             onClick={() =>
               onSubmit({
+                label,
                 color,
                 widthFt,
                 heightFt,

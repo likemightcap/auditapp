@@ -7,13 +7,10 @@ import { LevelModal } from "./components/LevelModal";
 import type { LevelModalSubmit } from "./components/LevelModal";
 import { Workspace } from "./components/Workspace";
 import { EditorProvider, useEditor } from "./state/EditorContext";
-import type { Orientation } from "./types";
 
 const SIDEBAR_BASE_WIDTH = 280;
 const SIDEBAR_COLLAPSED_BASE_WIDTH = 84;
 const SIDEBAR_MIN_SCALE = 0.42;
-const ORIENTATION_ORDER: Orientation[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-
 interface LevelModalState {
   mode: "create" | "edit";
   floorId?: string;
@@ -68,6 +65,7 @@ function EditorShell() {
   const canRedo = state.historyFuture.length > 0;
   const canDelete = state.selection.kind !== "none";
   const hasLayout = state.project.floors.length > 0;
+  const activeFloor = state.project.floors.find((item) => item.id === state.project.activeFloorId) ?? state.project.floors[0] ?? null;
   const [levelModalState, setLevelModalState] = useState<LevelModalState | null>(null);
   const [deleteLevelConfirmState, setDeleteLevelConfirmState] = useState<DeleteLevelConfirmState | null>(null);
   const [duplicateLevelState, setDuplicateLevelState] = useState<DuplicateLevelState | null>(null);
@@ -289,12 +287,6 @@ function EditorShell() {
     setLevelModalState(null);
   };
 
-  const cycleOrientation = () => {
-    const currentIndex = ORIENTATION_ORDER.indexOf(state.project.orientation);
-    const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % ORIENTATION_ORDER.length : 0;
-    dispatch({ type: "SET_ORIENTATION", orientation: ORIENTATION_ORDER[nextIndex] });
-  };
-
   return (
     <div
       ref={shellRef}
@@ -321,15 +313,7 @@ function EditorShell() {
         <header className="stage-header">
           <div className="stage-header-title">
             <h1>HOME LAYOUT</h1>
-            <button
-              type="button"
-              className="header-orientation-btn"
-              onClick={cycleOrientation}
-              aria-label="Cycle orientation"
-              title={`Orientation: ${state.project.orientation}`}
-            >
-              {state.project.orientation}
-            </button>
+            {activeFloor && <span className="stage-header-level">{activeFloor.name}</span>}
           </div>
           <div className="header-actions">
             <button type="button" disabled={!canUndo} onClick={() => dispatch({ type: "UNDO" })}>

@@ -520,6 +520,16 @@ select {
   gap: 10px;
 }
 
+.stage-header-level {
+  font-family: var(--font-ui);
+  font-size: 1rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: #4f678c;
+  line-height: 1;
+  margin-left: 8px;
+}
+
 .header-orientation-btn {
   width: 36px;
   height: 36px;
@@ -539,6 +549,13 @@ select {
 
 .header-orientation-btn:hover {
   filter: brightness(1.06);
+}
+
+.workspace-orientation-btn {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  z-index: 11;
 }
 
 .header-actions {
@@ -615,6 +632,11 @@ select {
   -webkit-touch-callout: none;
 }
 
+.workspace.workspace-resize-cursor-active,
+.workspace.workspace-resize-cursor-active * {
+  cursor: none !important;
+}
+
 .workspace-sticky-badge {
   position: absolute;
   top: 12px;
@@ -631,6 +653,41 @@ select {
   padding: 6px 9px;
   box-shadow: 0 4px 10px rgba(26, 57, 100, 0.26);
   backdrop-filter: blur(2px);
+}
+
+.workspace-edit-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 11;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid #bfd2ec;
+  background: linear-gradient(180deg, #ffffff 0%, #edf4ff 100%);
+  color: #28508c;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 3px 10px rgba(33, 66, 109, 0.16);
+  transition: transform 120ms ease, filter 120ms ease, box-shadow 120ms ease;
+}
+
+.workspace-edit-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.04);
+}
+
+.workspace-edit-btn:active {
+  transform: translateY(0);
+}
+
+.workspace-edit-btn-icon {
+  width: 20px;
+  height: 20px;
+  display: block;
+  object-fit: contain;
 }
 
 .workspace-camera-controls {
