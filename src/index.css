@@ -414,8 +414,42 @@ select {
   cursor: not-allowed;
 }
 
-.return-btn {
+.sidebar-file-actions {
   margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.load-file-input {
+  display: none;
+}
+
+.save-load-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.save-load-btn {
+  border-radius: 10px;
+  min-height: 40px;
+  border: 1px solid #d4e0f0;
+  background: linear-gradient(180deg, #ffffff 0%, #eff5fe 100%);
+  color: #264577;
+  font-size: 0.76rem;
+  line-height: 1;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.save-load-btn:hover {
+  filter: brightness(1.03);
+}
+
+.return-btn {
   border: 0;
   border-radius: 11px;
   min-height: 52px;
@@ -432,6 +466,33 @@ select {
   overflow: hidden;
   text-overflow: clip;
   cursor: pointer;
+}
+
+.export-pdf-btn {
+  border-radius: 11px;
+  min-height: 46px;
+  background: linear-gradient(180deg, #1f5cab 0%, #17488c 100%);
+  color: #ffffff;
+  border: 1px solid #1a4f97;
+  padding: 8px 10px;
+  font-size: 0.8rem;
+  line-height: 1;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
+  cursor: pointer;
+}
+
+.export-pdf-btn:hover:not(:disabled) {
+  filter: brightness(1.04);
+}
+
+.export-pdf-btn:disabled {
+  opacity: 0.65;
+  cursor: progress;
 }
 
 .left-toolbar.collapsed {
@@ -490,6 +551,25 @@ select {
 }
 
 .left-toolbar.collapsed .return-btn {
+  min-height: 40px;
+  padding: 0;
+  font-size: 0.72rem;
+}
+
+.left-toolbar.collapsed .sidebar-file-actions {
+  gap: 6px;
+}
+
+.left-toolbar.collapsed .save-load-row {
+  gap: 6px;
+}
+
+.left-toolbar.collapsed .save-load-btn {
+  min-height: 36px;
+  font-size: 0.68rem;
+}
+
+.left-toolbar.collapsed .export-pdf-btn {
   min-height: 40px;
   padding: 0;
   font-size: 0.72rem;

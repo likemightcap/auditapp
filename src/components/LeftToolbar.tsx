@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { PDFDocument, StandardFonts, degrees, rgb } from "pdf-lib";
 import { calculateProjectMetrics } from "../utils/calculations";
 import { useEditor } from "../state/EditorContext";
 import { createEntityFromTool } from "../state/editorReducer";
 import { TOOL_DEFINITIONS } from "../tools/toolDefinitions";
+import { exportProjectAsJson, importProjectFromJson } from "../utils/persistence";
 import { getUtilityIconByToolId, isUtilityToolId } from "../assets/utilityIcons";
 import doorToolIcon from "../../assets/building-icons/door.png";
 import doubleDoorToolIcon from "../../assets/building-icons/double-door.png";
@@ -14,8 +16,8 @@ import { WindowModal } from "./WindowModal";
 import type { WindowModalSubmit } from "./WindowModal";
 import { UtilityLabelModal } from "./UtilityLabelModal";
 import type { UtilityLabelInitialValues, UtilityLabelSubmit } from "./UtilityLabelModal";
-import { screenToWorld, snapPointToGrid } from "../utils/geometry";
-import type { ToolId } from "../types";
+import { MAX_ZOOM, MIN_ZOOM, clamp, screenToWorld, snapPointToGrid } from "../utils/geometry";
+import type { CameraState, FloorData, MapEntity, ToolId } from "../types";
 
 type DoorToolType = "single" | "double" | "sliding";
 
@@ -55,6 +57,300 @@ interface UtilityDragState {
 interface UtilityLabelModalState {
   entityId: string;
   initialValues: UtilityLabelInitialValues;
+}
+
+interface WorldBounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+interface LevelRender {
+  name: string;
+  pngDataUrl: string;
+}
+
+function isUtilityEntityType(type: MapEntity["type"]): boolean {
+  return type === "condenser" || type === "heater" || type === "dhw" || type === "gas" || type === "electric" || type === "other";
+}
+
+function expandBounds(base: WorldBounds | null, next: WorldBounds | null): WorldBounds | null {
+  if (!next) {
+    return base;
+  }
+  if (!base) {
+    return next;
+  }
+  return {
+    minX: Math.min(base.minX, next.minX),
+    minY: Math.min(base.minY, next.minY),
+    maxX: Math.max(base.maxX, next.maxX),
+    maxY: Math.max(base.maxY, next.maxY),
+  };
+}
+
+function getEntityWorldBounds(entity: MapEntity): WorldBounds {
+  if (entity.type === "rectangle" || entity.type === "line") {
+    return {
+      minX: Math.min(entity.x, entity.x + entity.width),
+      minY: Math.min(entity.y, entity.y + entity.height),
+      maxX: Math.max(entity.x, entity.x + entity.width),
+      maxY: Math.max(entity.y, entity.y + entity.height),
+    };
+  }
+
+  if (entity.type === "skylight" || isUtilityEntityType(entity.type)) {
+    const halfW = Math.abs(entity.width) / 2;
+    const halfH = Math.abs(entity.height) / 2;
+    return {
+      minX: entity.x - halfW,
+      minY: entity.y - halfH,
+      maxX: entity.x + halfW,
+      maxY: entity.y + halfH,
+    };
+  }
+
+  return {
+    minX: entity.x,
+    minY: entity.y,
+    maxX: entity.x + Math.abs(entity.width),
+    maxY: entity.y + Math.abs(entity.height),
+  };
+}
+
+function getFloorFrameBounds(floor: FloorData): WorldBounds | null {
+  let bounds: WorldBounds | null = null;
+
+  for (const entity of floor.entities) {
+    bounds = expandBounds(bounds, getEntityWorldBounds(entity));
+  }
+
+  for (const point of floor.wallPoints) {
+    bounds = expandBounds(bounds, {
+      minX: point.x - 0.6,
+      minY: point.y - 0.6,
+      maxX: point.x + 0.6,
+      maxY: point.y + 0.6,
+    });
+  }
+
+  const pointsById = new Map(floor.wallPoints.map((point) => [point.id, point]));
+  for (const segment of floor.wallSegments) {
+    const start = pointsById.get(segment.startPointId);
+    const end = pointsById.get(segment.endPointId);
+    if (!start || !end) {
+      continue;
+    }
+    bounds = expandBounds(bounds, {
+      minX: Math.min(start.x, end.x),
+      minY: Math.min(start.y, end.y),
+      maxX: Math.max(start.x, end.x),
+      maxY: Math.max(start.y, end.y),
+    });
+  }
+
+  return bounds;
+}
+
+function frameCameraForBounds(bounds: WorldBounds, viewportWidth: number, viewportHeight: number): CameraState {
+  const padding = 4;
+  const width = Math.max(1, bounds.maxX - bounds.minX + padding * 2);
+  const height = Math.max(1, bounds.maxY - bounds.minY + padding * 2);
+  const zoom = clamp(Math.min(viewportWidth / width, viewportHeight / height), MIN_ZOOM, MAX_ZOOM);
+  const centerX = (bounds.minX + bounds.maxX) / 2;
+  const centerY = (bounds.minY + bounds.maxY) / 2;
+  return {
+    zoom,
+    x: viewportWidth / 2 - centerX * zoom,
+    y: viewportHeight / 2 - centerY * zoom,
+  };
+}
+
+function waitForPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => resolve());
+    });
+  });
+}
+
+function collectDocumentCssText(): string {
+  const chunks: string[] = [];
+  for (const sheet of Array.from(document.styleSheets)) {
+    try {
+      const rules = sheet.cssRules;
+      for (const rule of Array.from(rules)) {
+        chunks.push(rule.cssText);
+      }
+    } catch {
+      // Ignore unreadable stylesheets (e.g. browser internals).
+    }
+  }
+  return chunks.join("\n");
+}
+
+async function captureWorkspacePngDataUrl(svg: SVGSVGElement, scale = 2): Promise<string> {
+  const width = Math.max(1, Math.round(svg.clientWidth));
+  const height = Math.max(1, Math.round(svg.clientHeight));
+  const clone = svg.cloneNode(true) as SVGSVGElement;
+  clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  clone.setAttribute("xmlns:xlink", "http://www.w3.org/1999/xlink");
+  clone.setAttribute("width", String(width));
+  clone.setAttribute("height", String(height));
+  clone.setAttribute("viewBox", `0 0 ${width} ${height}`);
+
+  const cssText = collectDocumentCssText();
+  if (cssText) {
+    const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
+    style.setAttribute("type", "text/css");
+    style.textContent = cssText;
+    clone.insertBefore(style, clone.firstChild);
+  }
+
+  const serialized = new XMLSerializer().serializeToString(clone);
+  const blob = new Blob([serialized], { type: "image/svg+xml;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const next = new Image();
+      next.onload = () => resolve(next);
+      next.onerror = () => reject(new Error("Unable to load workspace SVG for export."));
+      next.src = url;
+    });
+
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("Unable to create export canvas context.");
+    }
+    context.setTransform(scale, 0, 0, scale, 0, 0);
+    context.drawImage(image, 0, 0, width, height);
+    return canvas.toDataURL("image/png");
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function downloadLevelsPdf(levels: LevelRender[], metrics: ReturnType<typeof calculateProjectMetrics>): Promise<void> {
+  const pdfDoc = await PDFDocument.create();
+  const headerFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const textFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const pageWidth = 612;
+  const pageHeight = 792;
+  const blue = rgb(0.38, 0.56, 0.78);
+  const navy = rgb(0.13, 0.22, 0.37);
+  const white = rgb(1, 1, 1);
+  const pages = Math.max(1, Math.ceil(levels.length / 2));
+
+  for (let pageIndex = 0; pageIndex < pages; pageIndex += 1) {
+    const page = pdfDoc.addPage([pageWidth, pageHeight]);
+    const left = 0;
+    const right = pageWidth;
+    const headerHeight = 92;
+    const divider = 6;
+    const bodyTop = pageHeight - headerHeight;
+    const bodyHeight = bodyTop;
+    const sectionHeight = (bodyHeight - divider) / 2;
+
+    page.drawText("HOME LAYOUT", {
+      x: 48,
+      y: pageHeight - 62,
+      size: 40,
+      font: headerFont,
+      color: navy,
+    });
+
+    const detailSize = 13;
+    const detailX = pageWidth - 210;
+    page.drawText(`${metrics.conditionedAreaFt2.toFixed(0)} :TOTAL FT²`, {
+      x: detailX,
+      y: pageHeight - 34,
+      size: detailSize,
+      font: textFont,
+      color: navy,
+    });
+    page.drawText(`${metrics.averageCeilingHeightFt.toFixed(1)} :AVERAGE CEILING HEIGHT`, {
+      x: detailX,
+      y: pageHeight - 52,
+      size: detailSize,
+      font: textFont,
+      color: navy,
+    });
+    page.drawText(`${metrics.volumeFt3.toFixed(0)} :TOTAL VOLUME`, {
+      x: detailX,
+      y: pageHeight - 70,
+      size: detailSize,
+      font: textFont,
+      color: navy,
+    });
+
+    const slots = [
+      { y: sectionHeight + divider, level: levels[pageIndex * 2] },
+      { y: 0, level: levels[pageIndex * 2 + 1] },
+    ];
+
+    for (const slot of slots) {
+      page.drawRectangle({
+        x: left,
+        y: slot.y,
+        width: right - left,
+        height: sectionHeight,
+        color: blue,
+      });
+
+      if (!slot.level) {
+        continue;
+      }
+
+      const label = slot.level.name.toUpperCase();
+      const labelSize = 26;
+      const labelWidth = textFont.widthOfTextAtSize(label, labelSize);
+      const labelCenterY = slot.y + sectionHeight / 2;
+      page.drawText(label, {
+        x: 30,
+        y: labelCenterY - labelWidth / 2,
+        size: labelSize,
+        rotate: degrees(90),
+        font: textFont,
+        color: white,
+      });
+
+      const image = await pdfDoc.embedPng(slot.level.pngDataUrl);
+      const innerLeft = left + 44;
+      const innerRight = right - 14;
+      const innerBottom = slot.y + 12;
+      const innerTop = slot.y + sectionHeight - 12;
+      const innerWidth = innerRight - innerLeft;
+      let targetHeight = innerTop - innerBottom;
+      let targetWidth = targetHeight * (image.width / image.height);
+      if (targetWidth > innerWidth) {
+        targetWidth = innerWidth;
+        targetHeight = targetWidth * (image.height / image.width);
+      }
+
+      const x = innerLeft + (innerWidth - targetWidth) / 2;
+      const y = innerBottom + ((innerTop - innerBottom) - targetHeight) / 2;
+      page.drawImage(image, {
+        x,
+        y,
+        width: targetWidth,
+        height: targetHeight,
+      });
+    }
+  }
+
+  const bytes = await pdfDoc.save();
+  const pdfBytes = new Uint8Array(bytes);
+  const blob = new Blob([pdfBytes], { type: "application/pdf" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "home-layout-export.pdf";
+  link.click();
+  URL.revokeObjectURL(link.href);
 }
 
 function ToolIcon({
@@ -382,6 +678,8 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
   const [windowToolModalOpen, setWindowToolModalOpen] = useState(false);
   const [utilityDrag, setUtilityDrag] = useState<UtilityDragState | null>(null);
   const [utilityLabelModalState, setUtilityLabelModalState] = useState<UtilityLabelModalState | null>(null);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const windowDefaultWidthFt = clampPositiveInt(Number(state.project.metadata.windowDefaultWidthFt ?? 3), 3);
   const windowDefaultHeightFt = clampPositiveInt(Number(state.project.metadata.windowDefaultHeightFt ?? 4), 4);
@@ -560,6 +858,113 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
     />
   );
 
+  const exportPdf = async () => {
+    if (isExportingPdf || state.project.floors.length === 0) {
+      return;
+    }
+
+    const workspaceSvg = document.querySelector("svg.workspace") as SVGSVGElement | null;
+    if (!workspaceSvg) {
+      window.alert("Unable to find workspace for PDF export.");
+      return;
+    }
+
+    const viewportWidth = workspaceSvg.clientWidth;
+    const viewportHeight = workspaceSvg.clientHeight;
+    if (viewportWidth <= 0 || viewportHeight <= 0) {
+      window.alert("Workspace has invalid dimensions for export.");
+      return;
+    }
+
+    const originalFloorId = state.project.activeFloorId;
+    const originalCamera = { ...state.camera };
+    const originalSelection = state.selection;
+
+    const floorSnapshot = [...state.project.floors];
+    const levelRenders: LevelRender[] = [];
+
+    setIsExportingPdf(true);
+    try {
+      dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
+      dispatch({ type: "CLEAR_PREVIEW_ENTITY" });
+
+      for (const floor of floorSnapshot) {
+        dispatch({ type: "SET_ACTIVE_FLOOR", floorId: floor.id });
+        await waitForPaint();
+
+        const frameButton = document.querySelector("button.workspace-frame-btn") as HTMLButtonElement | null;
+        if (frameButton) {
+          frameButton.click();
+          await waitForPaint();
+        } else {
+          const bounds = getFloorFrameBounds(floor);
+          if (bounds) {
+            const framed = frameCameraForBounds(bounds, viewportWidth, viewportHeight);
+            dispatch({ type: "SET_CAMERA", camera: framed });
+            await waitForPaint();
+          }
+        }
+
+        const pngDataUrl = await captureWorkspacePngDataUrl(workspaceSvg, 2);
+        levelRenders.push({ name: floor.name, pngDataUrl });
+      }
+
+      await downloadLevelsPdf(levelRenders, metrics);
+    } catch (error) {
+      console.error(error);
+      window.alert("PDF export failed. Please try again.");
+    } finally {
+      dispatch({ type: "SET_ACTIVE_FLOOR", floorId: originalFloorId });
+      dispatch({ type: "SET_CAMERA", camera: originalCamera });
+      dispatch({ type: "SET_SELECTION", selection: originalSelection });
+      setIsExportingPdf(false);
+    }
+  };
+
+  const saveProjectToDevice = () => {
+    const json = exportProjectAsJson(state.project);
+    const blob = new Blob([json], { type: "application/json" });
+    const safeName = (state.project.projectName || "home-layout")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "home-layout";
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `${safeName}.audit.json`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+
+  const loadProjectFromDevice = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    try {
+      const raw = await file.text();
+      const imported = importProjectFromJson(raw);
+      const looksValid =
+        imported &&
+        typeof imported === "object" &&
+        Array.isArray(imported.floors) &&
+        typeof imported.activeFloorId === "string";
+
+      if (!looksValid) {
+        throw new Error("Invalid project format");
+      }
+
+      dispatch({ type: "LOAD_PROJECT", project: imported });
+      dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
+    } catch (error) {
+      console.error(error);
+      window.alert("Unable to load file. Please choose a valid project JSON export.");
+    } finally {
+      event.target.value = "";
+    }
+  };
+
   return (
     <aside className={`left-toolbar ${collapsed ? "collapsed" : ""}`}>
       <button
@@ -612,15 +1017,74 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
         </section>
       )}
 
-      <button
-        className="return-btn"
-        type="button"
-        onClick={() => window.history.back()}
-        title="Return"
-        aria-label="Return"
-      >
-        {collapsed ? "<-" : "Return To Job"}
-      </button>
+      {!collapsed && (
+        <div className="sidebar-file-actions">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="load-file-input"
+            onChange={(event) => {
+              void loadProjectFromDevice(event);
+            }}
+          />
+          <div className="save-load-row">
+            <button
+              className="save-load-btn"
+              type="button"
+              onClick={saveProjectToDevice}
+              title="Save"
+              aria-label="Save"
+            >
+              SAVE
+            </button>
+            <button
+              className="save-load-btn"
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              title="Load"
+              aria-label="Load"
+            >
+              LOAD
+            </button>
+          </div>
+
+          <button
+            className="export-pdf-btn"
+            type="button"
+            onClick={() => {
+              void exportPdf();
+            }}
+            title="Export PDF"
+            aria-label="Export PDF"
+            disabled={isExportingPdf}
+          >
+            {isExportingPdf ? "Exporting PDF..." : "EXPORT PDF"}
+          </button>
+
+          <button
+            className="return-btn"
+            type="button"
+            onClick={() => window.history.back()}
+            title="Return"
+            aria-label="Return"
+          >
+            Return To Job
+          </button>
+        </div>
+      )}
+
+      {collapsed && (
+        <button
+          className="return-btn"
+          type="button"
+          onClick={() => window.history.back()}
+          title="Return"
+          aria-label="Return"
+        >
+          {"<-"}
+        </button>
+      )}
 
       {typeof document !== "undefined" ? createPortal(windowToolModal, document.body) : windowToolModal}
       {typeof document !== "undefined" ? createPortal(utilityLabelModal, document.body) : utilityLabelModal}
