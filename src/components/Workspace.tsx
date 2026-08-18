@@ -13,6 +13,7 @@ import type { SlidingGlassDoorModalSubmit } from "./SlidingGlassDoorModal";
 import { UtilityLabelModal } from "./UtilityLabelModal";
 import type { UtilityLabelSubmit } from "./UtilityLabelModal";
 import resizeIcon from "../../assets/svgs/resize-icon.svg";
+import moveIcon from "../../assets/svgs/move-icon.svg";
 import editIcon from "../../assets/svgs/edit-icon.svg";
 import { useEditor } from "../state/EditorContext";
 import { createEntityFromTool, createWallPoint, createWallSegment } from "../state/editorReducer";
@@ -83,7 +84,7 @@ const WINDOW_FILL_THICKNESS = 0.56;
 const WINDOW_SELECTION_PADDING = 0.12;
 const WINDOW_ANCHOR_WIDTH = 0.48;
 const WINDOW_ANCHOR_HEIGHT = 1.16;
-const WINDOW_HANDLE_HIT_SLOP = 0.34;
+const WINDOW_HANDLE_HIT_SLOP = 0.76;
 const WINDOW_LABEL_OFFSET = 1.02;
 const LINEAR_MARKER_COLOR = "#edf5ff";
 const RESIZE_HINT_COLOR = "#7de8ff";
@@ -104,6 +105,10 @@ const SLIDING_DOOR_DEFAULT_HEIGHT = 7;
 const SINGLE_DOOR_VISUAL_WIDTH = 3;
 const DOUBLE_DOOR_VISUAL_WIDTH = 6;
 const EDGE_MATCH_EPSILON = 0.001;
+const RECT_DRAW_START_EDGE_SNAP_THRESHOLD = 3;
+const OPENING_PLACEMENT_SNAP_THRESHOLD = 3;
+const OPENING_PREVIEW_SNAP_THRESHOLD = 3;
+const OPENING_PLACEMENT_PREVIEW_ID = "__opening-placement-preview__";
 
 type DoorKind = "single" | "double" | "sliding";
 
@@ -515,6 +520,8 @@ function getTextColor(color: string): string {
   switch (color.toLowerCase()) {
     case "blue":
       return "#1117ff";
+    case "green":
+      return "#00ff6a";
     case "red":
       return "#e00000";
     case "yellow":
@@ -1077,6 +1084,147 @@ function isUnconditionedRectangle(entity: MapEntity): boolean {
   return entity.type === "rectangle" && Boolean(entity.metadata.unconditioned);
 }
 
+function containsPoint(rect: RectBounds, x: number, y: number): boolean {
+  return x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height;
+}
+
+function getCellsOutsideDuplicateConditionedBaseline(
+  rect: RectBounds,
+  baseline: Array<{ x: number; y: number; width: number; height: number }>,
+): RectBounds[] {
+  const minX = Math.floor(rect.x);
+  const minY = Math.floor(rect.y);
+  const maxX = Math.ceil(rect.x + rect.width);
+  const maxY = Math.ceil(rect.y + rect.height);
+  const cells: RectBounds[] = [];
+
+  for (let y = minY; y < maxY; y += 1) {
+    for (let x = minX; x < maxX; x += 1) {
+      const centerX = x + 0.5;
+      const centerY = y + 0.5;
+      if (!containsPoint(rect, centerX, centerY)) {
+        continue;
+      }
+
+      const coveredByBaseline = baseline.some((baselineRect) => containsPoint(baselineRect, centerX, centerY));
+      if (!coveredByBaseline) {
+        cells.push({ x, y, width: 1, height: 1 });
+      }
+    }
+  }
+
+  return cells;
+}
+
+interface OverflowOutlineSegment {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
+interface DuplicateOverflowRegion {
+  cells: RectBounds[];
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  outline: OverflowOutlineSegment[];
+}
+
+function buildDuplicateOverflowRegions(cells: RectBounds[]): DuplicateOverflowRegion[] {
+  if (cells.length === 0) {
+    return [];
+  }
+
+  const keyFor = (x: number, y: number) => `${x},${y}`;
+  const byKey = new Map(cells.map((cell) => [keyFor(cell.x, cell.y), cell]));
+  const visited = new Set<string>();
+  const regions: DuplicateOverflowRegion[] = [];
+
+  for (const cell of cells) {
+    const startKey = keyFor(cell.x, cell.y);
+    if (visited.has(startKey)) {
+      continue;
+    }
+
+    const queue: RectBounds[] = [cell];
+    const component: RectBounds[] = [];
+    visited.add(startKey);
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+      if (!current) {
+        continue;
+      }
+      component.push(current);
+
+      const neighbors = [
+        { x: current.x + 1, y: current.y },
+        { x: current.x - 1, y: current.y },
+        { x: current.x, y: current.y + 1 },
+        { x: current.x, y: current.y - 1 },
+      ];
+
+      for (const neighbor of neighbors) {
+        const key = keyFor(neighbor.x, neighbor.y);
+        if (visited.has(key)) {
+          continue;
+        }
+        const next = byKey.get(key);
+        if (!next) {
+          continue;
+        }
+        visited.add(key);
+        queue.push(next);
+      }
+    }
+
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+
+    for (const part of component) {
+      minX = Math.min(minX, part.x);
+      minY = Math.min(minY, part.y);
+      maxX = Math.max(maxX, part.x + part.width);
+      maxY = Math.max(maxY, part.y + part.height);
+    }
+
+    const componentSet = new Set(component.map((part) => keyFor(part.x, part.y)));
+    const outline: OverflowOutlineSegment[] = [];
+    for (const part of component) {
+      const x = part.x;
+      const y = part.y;
+
+      if (!componentSet.has(keyFor(x, y - 1))) {
+        outline.push({ x1: x, y1: y, x2: x + 1, y2: y });
+      }
+      if (!componentSet.has(keyFor(x + 1, y))) {
+        outline.push({ x1: x + 1, y1: y, x2: x + 1, y2: y + 1 });
+      }
+      if (!componentSet.has(keyFor(x, y + 1))) {
+        outline.push({ x1: x, y1: y + 1, x2: x + 1, y2: y + 1 });
+      }
+      if (!componentSet.has(keyFor(x - 1, y))) {
+        outline.push({ x1: x, y1: y, x2: x, y2: y + 1 });
+      }
+    }
+
+    regions.push({
+      cells: component,
+      minX,
+      minY,
+      maxX,
+      maxY,
+      outline,
+    });
+  }
+
+  return regions;
+}
+
 function getRectangleCeilingSignature(entity: MapEntity): string {
   const ceilingType = String(entity.metadata.ceilingType ?? "standard");
   const standardHeight = Number(entity.metadata.standardHeightFt ?? 8);
@@ -1486,6 +1634,17 @@ function nearestRectangleEdge(point: Point, rectangles: MapEntity[]): EdgeSnap |
   }
 
   return best;
+}
+
+function snapRectangleStartToNearbyEdge(point: Point, rectangles: MapEntity[]): Point {
+  const nearest = nearestRectangleEdge(point, rectangles);
+  if (!nearest || nearest.distance > RECT_DRAW_START_EDGE_SNAP_THRESHOLD) {
+    return point;
+  }
+  return {
+    x: Math.round(nearest.x),
+    y: Math.round(nearest.y),
+  };
 }
 
 function edgeRotation(edge: RectEdge): number {
@@ -2050,6 +2209,9 @@ export function Workspace() {
   const [utilityLabelModalState, setUtilityLabelModalState] = useState<UtilityLabelModalState | null>(null);
   const [cameraPanelCollapsed, setCameraPanelCollapsed] = useState(false);
   const [resizeHint, setResizeHint] = useState<ResizeHintState | null>(null);
+  const [hoveredSelectedEntityId, setHoveredSelectedEntityId] = useState<string | null>(null);
+  const [openingPlacementPreview, setOpeningPlacementPreview] = useState<MapEntity | null>(null);
+  const [pointerScreen, setPointerScreen] = useState<Point | null>(null);
   const [viewportSize, setViewportSize] = useState<ViewportSize>({ width: 0, height: 0 });
   const touchPointsRef = useRef<Map<number, Point>>(new Map());
   const longPressRef = useRef<LongPressState>({
@@ -2302,6 +2464,12 @@ export function Workspace() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [dispatch]);
 
+  useEffect(() => {
+    if (state.activeTool !== "door" && state.activeTool !== "window") {
+      setOpeningPlacementPreview(null);
+    }
+  }, [state.activeTool]);
+
   const getEventWorld = (event: { clientX: number; clientY: number }): Point => {
     const rect = svgRef.current?.getBoundingClientRect();
     const screen = {
@@ -2490,9 +2658,10 @@ export function Workspace() {
     type: "door" | "window",
     world: Point,
     requestedDoorKind?: DoorKind,
+    maxSnapDistance = OPENING_PLACEMENT_SNAP_THRESHOLD,
   ): MapEntity | null => {
     const snap = nearestRectangleEdge(world, rectangleEntities);
-    if (!snap || snap.distance > 0.9) {
+    if (!snap || snap.distance > maxSnapDistance) {
       return null;
     }
 
@@ -2649,6 +2818,8 @@ export function Workspace() {
   };
 
   const handleBackgroundDown = (event: ReactPointerEvent<SVGSVGElement>) => {
+    setOpeningPlacementPreview(null);
+
     if (event.pointerType === "touch" || event.pointerType === "pen") {
       event.preventDefault();
     }
@@ -2667,13 +2838,15 @@ export function Workspace() {
     setHoverWorld(world);
 
     if (state.activeTool === "rectangle") {
-      const nextEntity = createEntityFromTool("rectangle", Math.round(world.x), Math.round(world.y));
+      const baseStart = snapPointToGrid(world);
+      const snappedStart = snapRectangleStartToNearbyEdge(baseStart, rectangleEntities);
+      const nextEntity = createEntityFromTool("rectangle", snappedStart.x, snappedStart.y);
       nextEntity.width = 1;
       nextEntity.height = 1;
 
       startRectangleCanvasLongPress(
         event.pointerId,
-        { x: Math.round(world.x), y: Math.round(world.y) },
+        snappedStart,
         { x: event.clientX, y: event.clientY },
       );
 
@@ -2682,7 +2855,7 @@ export function Workspace() {
         pointerId: event.pointerId,
         pointerType: event.pointerType,
         startScreen: { x: event.clientX, y: event.clientY },
-        startWorld: { x: Math.round(world.x), y: Math.round(world.y) },
+        startWorld: snappedStart,
         entitySnapshot: nextEntity,
         sourceRectangleId: undefined,
         dragStarted: false,
@@ -2832,7 +3005,46 @@ export function Workspace() {
 
     const world = getEventWorld(event);
     setHoverWorld(world);
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (rect) {
+      setPointerScreen({ x: event.clientX - rect.left, y: event.clientY - rect.top });
+    }
     const interaction = interactionRef.current;
+
+    if ((state.activeTool === "door" || state.activeTool === "window") && interaction.type === "none") {
+      const previewCandidate =
+        state.activeTool === "door"
+          ? tryPlaceDoorOrWindow("door", world, getDefaultDoorKind(), OPENING_PREVIEW_SNAP_THRESHOLD)
+          : tryPlaceDoorOrWindow("window", world, undefined, OPENING_PREVIEW_SNAP_THRESHOLD);
+
+      if (!previewCandidate) {
+        setOpeningPlacementPreview((current) => (current ? null : current));
+      } else {
+        const nextPreview: MapEntity = {
+          ...previewCandidate,
+          id: OPENING_PLACEMENT_PREVIEW_ID,
+        };
+        setOpeningPlacementPreview((current) => {
+          if (
+            current &&
+            current.type === nextPreview.type &&
+            current.x === nextPreview.x &&
+            current.y === nextPreview.y &&
+            current.width === nextPreview.width &&
+            current.height === nextPreview.height &&
+            current.rotation === nextPreview.rotation &&
+            current.metadata.hostRectId === nextPreview.metadata.hostRectId &&
+            current.metadata.edge === nextPreview.metadata.edge &&
+            current.metadata.doorKind === nextPreview.metadata.doorKind
+          ) {
+            return current;
+          }
+          return nextPreview;
+        });
+      }
+    } else {
+      setOpeningPlacementPreview((current) => (current ? null : current));
+    }
 
     if (interaction.type === "none") {
       return;
@@ -2946,6 +3158,23 @@ export function Workspace() {
             ...interaction.entitySnapshot,
             x: locked.x,
             y: locked.y,
+          },
+        });
+        return;
+      }
+
+      if (interaction.entitySnapshot.type === "rectangle") {
+        const snapped = snapPointToGrid({
+          x: interaction.entitySnapshot.x + dx,
+          y: interaction.entitySnapshot.y + dy,
+        });
+
+        dispatch({
+          type: "SET_PREVIEW_ENTITY",
+          entity: {
+            ...interaction.entitySnapshot,
+            x: snapped.x,
+            y: snapped.y,
           },
         });
         return;
@@ -3314,6 +3543,13 @@ export function Workspace() {
           rectangleEntities,
         );
         dispatch({ type: "MOVE_ENTITY", entityId: interaction.targetId, x: locked.x, y: locked.y });
+      } else if (snapshot.type === "rectangle" && state.previewEntity?.id === snapshot.id) {
+        dispatch({
+          type: "MOVE_ENTITY",
+          entityId: interaction.targetId,
+          x: state.previewEntity.x,
+          y: state.previewEntity.y,
+        });
       } else {
         const snapped = snapPointToGrid({
           x: snapshot.x + dx,
@@ -3533,6 +3769,8 @@ export function Workspace() {
   };
 
   const handleEntityDown = (event: ReactPointerEvent<SVGGElement>, entity: MapEntity) => {
+    setOpeningPlacementPreview(null);
+
     event.stopPropagation();
     if (event.pointerType === "touch" || event.pointerType === "pen") {
       event.preventDefault();
@@ -3586,7 +3824,9 @@ export function Workspace() {
       }
 
       const world = getEventWorld(event);
-      const nextEntity = createEntityFromTool("rectangle", Math.round(world.x), Math.round(world.y));
+      const baseStart = snapPointToGrid(world);
+      const snappedStart = snapRectangleStartToNearbyEdge(baseStart, rectangleEntities);
+      const nextEntity = createEntityFromTool("rectangle", snappedStart.x, snappedStart.y);
       nextEntity.width = 1;
       nextEntity.height = 1;
 
@@ -3595,7 +3835,7 @@ export function Workspace() {
         pointerId: event.pointerId,
         pointerType: event.pointerType,
         startScreen: { x: event.clientX, y: event.clientY },
-        startWorld: { x: Math.round(world.x), y: Math.round(world.y) },
+        startWorld: snappedStart,
         entitySnapshot: nextEntity,
         sourceRectangleId: entity.type === "rectangle" ? entity.id : undefined,
         dragStarted: false,
@@ -4021,8 +4261,16 @@ export function Workspace() {
     );
   }, [renderedEntities, state.previewEntity]);
 
-  const renderedNonTextEntities = previewAdjustedEntities.filter((entity) => entity.type !== "text");
-  const renderedTextEntities = previewAdjustedEntities.filter((entity) => entity.type === "text");
+  const displayEntities = useMemo(() => {
+    if (!openingPlacementPreview) {
+      return previewAdjustedEntities;
+    }
+    return [...previewAdjustedEntities, openingPlacementPreview];
+  }, [openingPlacementPreview, previewAdjustedEntities]);
+
+  const renderedNonTextEntities = displayEntities.filter((entity) => entity.type !== "text");
+  const renderedTextEntities = displayEntities.filter((entity) => entity.type === "text");
+  const duplicateConditionedBaseline = floor.duplicateConditionedBaseline ?? null;
   const hideLinearMarkers =
     interactionRef.current.type === "draw-rect" ||
     (interactionRef.current.type === "resize-rect" && interactionRef.current.entitySnapshot?.type === "rectangle") ||
@@ -4094,6 +4342,23 @@ export function Workspace() {
         y: state.camera.y + resizeCursorWorld.y * state.camera.zoom,
       }
     : null;
+  const draggingEntity = interactionRef.current.type === "drag-entity";
+  const hoveringSelectedEntity =
+    state.selection.kind === "entity" &&
+    hoveredSelectedEntityId !== null &&
+    hoveredSelectedEntityId === state.selection.id;
+  const showMoveCursorOverlay = !showResizeCursorOverlay && (draggingEntity || hoveringSelectedEntity);
+  const moveCursorWorld = interactionRef.current.latestWorld ?? hoverWorld;
+  const moveCursorScreen = pointerScreen ??
+    (moveCursorWorld
+      ? {
+          x: state.camera.x + moveCursorWorld.x * state.camera.zoom,
+          y: state.camera.y + moveCursorWorld.y * state.camera.zoom,
+        }
+      : null);
+  const showCustomCursorOverlay =
+    (showResizeCursorOverlay && resizeCursorScreen) ||
+    (showMoveCursorOverlay && moveCursorScreen);
   const showSelectedEditIcon = Boolean(selectedEditableEntity);
 
   return (
@@ -4105,28 +4370,38 @@ export function Workspace() {
       )}
       <svg
         ref={svgRef}
-        className={`workspace ${showResizeCursorOverlay && resizeCursorScreen ? "workspace-resize-cursor-active" : ""}`}
+        className={`workspace ${showCustomCursorOverlay ? "workspace-custom-cursor-active" : ""}`}
         onPointerDown={handleBackgroundDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
-        onPointerLeave={() => setResizeHint((current) => (current ? null : current))}
+        onDoubleClick={(event) => {
+          const target = event.target as Element | null;
+          const isEmptyGridTarget = target === event.currentTarget || target?.tagName.toLowerCase() === "rect";
+          if (isEmptyGridTarget && state.activeTool !== "select") {
+            dispatch({ type: "SET_TOOL", tool: "select" });
+          }
+        }}
+        onPointerLeave={() => {
+          setResizeHint((current) => (current ? null : current));
+          setHoveredSelectedEntityId(null);
+          setOpeningPlacementPreview(null);
+          setPointerScreen(null);
+        }}
         onContextMenu={(event) => event.preventDefault()}
         onWheel={handleWheel}
       >
         <defs>
           <pattern
-            id="unconditioned-hatch"
+            id="duplicate-conditioned-hatch"
             patternUnits="userSpaceOnUse"
-            width={3.2}
-            height={3.2}
+            width={2.2}
+            height={2.2}
             patternTransform="rotate(45)"
           >
-            <line x1={0} y1={0} x2={0} y2={3.2} stroke="#af8c8c" strokeWidth={0.14} />
+            <line x1={0} y1={0} x2={0} y2={2.2} stroke="#a07a16" strokeWidth={0.13} />
           </pattern>
-        </defs>
 
-        <defs>
           <linearGradient id="workspace-bg" x1="0" y1="0" x2="1" y2="1">
             <stop offset="0%" stopColor="#6baef6" />
             <stop offset="55%" stopColor="#4f93e7" />
@@ -4240,6 +4515,7 @@ export function Workspace() {
           })}
 
           {renderedNonTextEntities.map((entity) => {
+            const isOpeningPreviewEntity = entity.id === OPENING_PLACEMENT_PREVIEW_ID;
             const selected = state.selection.kind === "entity" && state.selection.id === entity.id;
             const isActiveWindowResize =
               interactionRef.current.type === "resize-window" && interactionRef.current.targetId === entity.id;
@@ -4262,16 +4538,17 @@ export function Workspace() {
               <g
                 key={entity.id}
                 {...common}
+                opacity={isOpeningPreviewEntity ? 0.45 : 1}
+                pointerEvents={isOpeningPreviewEntity ? "none" : undefined}
                 onPointerDown={(event) => handleEntityDown(event, entity)}
-                onDoubleClick={(event) => {
-                  event.stopPropagation();
-                  const next = window.prompt("Label", entity.label);
-                  if (next !== null) {
-                    dispatch({
-                      type: "UPDATE_ENTITY_LABEL",
-                      entityId: entity.id,
-                      label: entity.type === "text" ? next.toUpperCase() : next,
-                    });
+                onPointerEnter={() => {
+                  if (state.selection.kind === "entity" && state.selection.id === entity.id) {
+                    setHoveredSelectedEntityId(entity.id);
+                  }
+                }}
+                onPointerLeave={() => {
+                  if (state.selection.kind === "entity" && state.selection.id === entity.id) {
+                    setHoveredSelectedEntityId((current) => (current === entity.id ? null : current));
                   }
                 }}
               >
@@ -4305,6 +4582,7 @@ export function Workspace() {
                       const rightLeafPath = `M ${doorVisualWidth / 2} 0 L 0 0 A ${halfLeaf} ${halfLeaf} 0 0 0 ${doorVisualWidth / 2} ${halfLeaf} Z`;
 
                       if (doorKind === "sliding") {
+                        const slidingTypeLabelY = -renderedLabelY;
                         return (
                           <>
                             {selected && (
@@ -4418,6 +4696,17 @@ export function Workspace() {
                               transform={edge === "bottom" ? `rotate(180 0 ${renderedLabelY})` : undefined}
                             >
                               {`${fmtFeet(entity.width)} x ${fmtFeet(entity.height)}`}
+                            </text>
+                            <text
+                              x={0}
+                              y={slidingTypeLabelY}
+                              textAnchor="middle"
+                              fill={OPENING_SIZE_LABEL_COLOR}
+                              fontSize={OPENING_SIZE_LABEL_FONT_SIZE * 0.78}
+                              fontWeight={900}
+                              transform={edge === "bottom" ? `rotate(180 0 ${slidingTypeLabelY})` : undefined}
+                            >
+                              SLIDING DOOR
                             </text>
                           </>
                         );
@@ -4691,6 +4980,14 @@ export function Workspace() {
                       const width = Math.max(entity.width, 0.4);
                       const height = Math.max(entity.height, 0.4);
                       const isUnconditioned = Boolean(entity.metadata.unconditioned);
+                      const duplicateOverflowCells =
+                        duplicateConditionedBaseline && !isUnconditioned
+                          ? getCellsOutsideDuplicateConditionedBaseline(
+                              { x: entity.x, y: entity.y, width, height },
+                              duplicateConditionedBaseline,
+                            )
+                          : [];
+                      const duplicateOverflowRegions = buildDuplicateOverflowRegions(duplicateOverflowCells);
                       const strokeColor = selected ? "#ffe59a" : "#ffffff";
                       const strokeWidth = selected ? 0.28 : 0.22;
                       const strokeMaskId = `rect-stroke-mask-${entity.id}`;
@@ -4782,6 +5079,12 @@ export function Workspace() {
 
                       return (
                         <>
+                          {isUnconditioned && (
+                            <g pointerEvents="none">
+                              <line x1={0} y1={0} x2={width} y2={height} stroke="#c53d3d" strokeWidth={0.24} />
+                              <line x1={width} y1={0} x2={0} y2={height} stroke="#c53d3d" strokeWidth={0.24} />
+                            </g>
+                          )}
                           <rect
                             x={0}
                             y={0}
@@ -4791,6 +5094,83 @@ export function Workspace() {
                             fill={getRectangleFillColor(entity.metadata.color ?? "Blue")}
                             shapeRendering="crispEdges"
                           />
+                          {duplicateOverflowRegions.length > 0 && (
+                            <g pointerEvents="none">
+                              {duplicateOverflowRegions.map((region, regionIndex) => {
+                                const labelCenterX = (region.minX + region.maxX) / 2 - entity.x;
+                                const labelCenterY = (region.minY + region.maxY) / 2 - entity.y;
+                                const regionAreaFt2 = region.cells.length;
+                                const labelFontSize = clampValue(
+                                  Math.min(region.maxX - region.minX, region.maxY - region.minY) * 0.22,
+                                  0.34,
+                                  0.62,
+                                );
+
+                                return (
+                                  <g key={`${entity.id}-dup-overflow-region-${regionIndex}`}>
+                                    {region.cells.map((cell) => (
+                                      <g key={`${entity.id}-dup-overflow-${cell.x}-${cell.y}`}>
+                                        <rect
+                                          x={cell.x - entity.x}
+                                          y={cell.y - entity.y}
+                                          width={cell.width}
+                                          height={cell.height}
+                                          fill="rgba(242, 202, 69, 0.72)"
+                                        />
+                                        <rect
+                                          x={cell.x - entity.x}
+                                          y={cell.y - entity.y}
+                                          width={cell.width}
+                                          height={cell.height}
+                                          fill="url(#duplicate-conditioned-hatch)"
+                                        />
+                                      </g>
+                                    ))}
+
+                                    {region.outline.map((segment, segmentIndex) => (
+                                      <line
+                                        key={`${entity.id}-dup-overflow-outline-${regionIndex}-${segmentIndex}`}
+                                        x1={segment.x1 - entity.x}
+                                        y1={segment.y1 - entity.y}
+                                        x2={segment.x2 - entity.x}
+                                        y2={segment.y2 - entity.y}
+                                        stroke="#b58518"
+                                        strokeWidth={0.12}
+                                        shapeRendering="crispEdges"
+                                      />
+                                    ))}
+
+                                    <text
+                                      x={labelCenterX}
+                                      y={labelCenterY - labelFontSize * 0.36}
+                                      textAnchor="middle"
+                                      fill="#6d4f09"
+                                      fontSize={labelFontSize}
+                                      fontWeight={900}
+                                      stroke="rgba(255, 252, 237, 0.72)"
+                                      strokeWidth={0.028}
+                                      paintOrder="stroke"
+                                    >
+                                      over unconditoned space
+                                    </text>
+                                    <text
+                                      x={labelCenterX}
+                                      y={labelCenterY + labelFontSize * 0.8}
+                                      textAnchor="middle"
+                                      fill="#6d4f09"
+                                      fontSize={labelFontSize}
+                                      fontWeight={900}
+                                      stroke="rgba(255, 252, 237, 0.72)"
+                                      strokeWidth={0.028}
+                                      paintOrder="stroke"
+                                    >
+                                      {`${regionAreaFt2} SF`}
+                                    </text>
+                                  </g>
+                                );
+                              })}
+                            </g>
+                          )}
                           {!isUnconditioned && (
                             <mask id={strokeMaskId} maskUnits="userSpaceOnUse" x={-1} y={-1} width={width + 2} height={height + 2}>
                               <rect x={-1} y={-1} width={width + 2} height={height + 2} fill="#ffffff" />
@@ -4839,17 +5219,6 @@ export function Workspace() {
                         </>
                       );
                     })()}
-                    {Boolean(entity.metadata.unconditioned) && (
-                      <rect
-                        x={0}
-                        y={0}
-                        width={Math.max(entity.width, 0.4)}
-                        height={Math.max(entity.height, 0.4)}
-                        rx={0.1}
-                        fill="url(#unconditioned-hatch)"
-                        pointerEvents="none"
-                      />
-                    )}
                   </g>
                 ) : (
                   <rect
@@ -5071,7 +5440,7 @@ export function Workspace() {
                   x2={x2}
                   y2={y1}
                   stroke="transparent"
-                  strokeWidth={1.1}
+                  strokeWidth={2}
                   style={{ cursor: "ns-resize" }}
                   onPointerEnter={() => setResizeHintZone(selectedRectangleEntity.id, "rect-n")}
                   onPointerLeave={() => clearResizeHintZone(selectedRectangleEntity.id, "rect-n")}
@@ -5083,7 +5452,7 @@ export function Workspace() {
                   x2={x2}
                   y2={y2}
                   stroke="transparent"
-                  strokeWidth={1.1}
+                  strokeWidth={2}
                   style={{ cursor: "ns-resize" }}
                   onPointerEnter={() => setResizeHintZone(selectedRectangleEntity.id, "rect-s")}
                   onPointerLeave={() => clearResizeHintZone(selectedRectangleEntity.id, "rect-s")}
@@ -5095,7 +5464,7 @@ export function Workspace() {
                   x2={x1}
                   y2={y2}
                   stroke="transparent"
-                  strokeWidth={1.1}
+                  strokeWidth={2}
                   style={{ cursor: "ew-resize" }}
                   onPointerEnter={() => setResizeHintZone(selectedRectangleEntity.id, "rect-w")}
                   onPointerLeave={() => clearResizeHintZone(selectedRectangleEntity.id, "rect-w")}
@@ -5107,7 +5476,7 @@ export function Workspace() {
                   x2={x2}
                   y2={y2}
                   stroke="transparent"
-                  strokeWidth={1.1}
+                  strokeWidth={2}
                   style={{ cursor: "ew-resize" }}
                   onPointerEnter={() => setResizeHintZone(selectedRectangleEntity.id, "rect-e")}
                   onPointerLeave={() => clearResizeHintZone(selectedRectangleEntity.id, "rect-e")}
@@ -5137,7 +5506,7 @@ export function Workspace() {
                     <circle
                       cx={anchor.x}
                       cy={anchor.y}
-                      r={0.78}
+                      r={1}
                       fill="transparent"
                       style={{ cursor: anchor.cursor }}
                       onPointerEnter={() => setResizeHintZone(selectedRectangleEntity.id, `rect-${anchor.handle}` as ResizeHintZone)}
@@ -5192,8 +5561,10 @@ export function Workspace() {
                   x2={x2}
                   y2={y1}
                   stroke="transparent"
-                  strokeWidth={1.1}
+                  strokeWidth={2}
                   style={{ cursor: "ns-resize" }}
+                  onPointerEnter={() => setResizeHintZone(selectedSkylightEntity.id, "rect-n")}
+                  onPointerLeave={() => clearResizeHintZone(selectedSkylightEntity.id, "rect-n")}
                   onPointerDown={(event) => startSkylightResize(event, selectedSkylightEntity, "n")}
                 />
                 <line
@@ -5202,8 +5573,10 @@ export function Workspace() {
                   x2={x2}
                   y2={y2}
                   stroke="transparent"
-                  strokeWidth={1.1}
+                  strokeWidth={2}
                   style={{ cursor: "ns-resize" }}
+                  onPointerEnter={() => setResizeHintZone(selectedSkylightEntity.id, "rect-s")}
+                  onPointerLeave={() => clearResizeHintZone(selectedSkylightEntity.id, "rect-s")}
                   onPointerDown={(event) => startSkylightResize(event, selectedSkylightEntity, "s")}
                 />
                 <line
@@ -5212,8 +5585,10 @@ export function Workspace() {
                   x2={x1}
                   y2={y2}
                   stroke="transparent"
-                  strokeWidth={1.1}
+                  strokeWidth={2}
                   style={{ cursor: "ew-resize" }}
+                  onPointerEnter={() => setResizeHintZone(selectedSkylightEntity.id, "rect-w")}
+                  onPointerLeave={() => clearResizeHintZone(selectedSkylightEntity.id, "rect-w")}
                   onPointerDown={(event) => startSkylightResize(event, selectedSkylightEntity, "w")}
                 />
                 <line
@@ -5222,8 +5597,10 @@ export function Workspace() {
                   x2={x2}
                   y2={y2}
                   stroke="transparent"
-                  strokeWidth={1.1}
+                  strokeWidth={2}
                   style={{ cursor: "ew-resize" }}
+                  onPointerEnter={() => setResizeHintZone(selectedSkylightEntity.id, "rect-e")}
+                  onPointerLeave={() => clearResizeHintZone(selectedSkylightEntity.id, "rect-e")}
                   onPointerDown={(event) => startSkylightResize(event, selectedSkylightEntity, "e")}
                 />
 
@@ -5237,9 +5614,11 @@ export function Workspace() {
                     <circle
                       cx={anchor.x}
                       cy={anchor.y}
-                      r={0.58}
+                      r={1}
                       fill="transparent"
                       style={{ cursor: anchor.cursor }}
+                      onPointerEnter={() => setResizeHintZone(selectedSkylightEntity.id, `rect-${anchor.handle}` as ResizeHintZone)}
+                      onPointerLeave={() => clearResizeHintZone(selectedSkylightEntity.id, `rect-${anchor.handle}` as ResizeHintZone)}
                       onPointerDown={(event) => startSkylightResize(event, selectedSkylightEntity, anchor.handle)}
                     />
                     <circle
@@ -5277,15 +5656,14 @@ export function Workspace() {
                 key={entity.id}
                 transform={`translate(${entity.x} ${entity.y}) rotate(${entity.rotation})`}
                 onPointerDown={(event) => handleEntityDown(event, entity)}
-                onDoubleClick={(event) => {
-                  event.stopPropagation();
-                  const next = window.prompt("Label", entity.label);
-                  if (next !== null) {
-                    dispatch({
-                      type: "UPDATE_ENTITY_LABEL",
-                      entityId: entity.id,
-                      label: next.toUpperCase(),
-                    });
+                onPointerEnter={() => {
+                  if (state.selection.kind === "entity" && state.selection.id === entity.id) {
+                    setHoveredSelectedEntityId(entity.id);
+                  }
+                }}
+                onPointerLeave={() => {
+                  if (state.selection.kind === "entity" && state.selection.id === entity.id) {
+                    setHoveredSelectedEntityId((current) => (current === entity.id ? null : current));
                   }
                 }}
               >
@@ -5326,7 +5704,13 @@ export function Workspace() {
 
         {showResizeCursorOverlay && resizeCursorScreen && (
           <g transform={`translate(${resizeCursorScreen.x} ${resizeCursorScreen.y}) rotate(${resizeCursorAngle})`} pointerEvents="none">
-            <image href={resizeIcon} x={-17} y={-17} width={34} height={34} preserveAspectRatio="xMidYMid meet" />
+            <image href={resizeIcon} x={-10} y={-10} width={20} height={20} preserveAspectRatio="xMidYMid meet" />
+          </g>
+        )}
+
+        {showMoveCursorOverlay && moveCursorScreen && (
+          <g transform={`translate(${moveCursorScreen.x} ${moveCursorScreen.y})`} pointerEvents="none">
+            <image href={moveIcon} x={-10} y={-10} width={20} height={20} preserveAspectRatio="xMidYMid meet" />
           </g>
         )}
 
@@ -5496,8 +5880,15 @@ export function Workspace() {
 
       <TextModal
         isOpen={textModalState !== null}
+        mode={textModalState?.mode ?? "create"}
         initialValues={textModalState?.initialValues ?? DEFAULT_TEXT_MODAL_VALUES}
-        onCancel={() => setTextModalState(null)}
+        onCancel={() => {
+          const wasCreate = textModalState?.mode === "create";
+          setTextModalState(null);
+          if (wasCreate) {
+            dispatch({ type: "SET_TOOL", tool: "select" });
+          }
+        }}
         onSubmit={(payload: TextModalSubmit) => {
           if (!textModalState) {
             return;
@@ -5537,6 +5928,7 @@ export function Workspace() {
           dispatch({ type: "UPSERT_ENTITY", entity: textEntity });
           dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: textEntity.id } });
           setTextModalState(null);
+          dispatch({ type: "SET_TOOL", tool: "select" });
         }}
       />
 

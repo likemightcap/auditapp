@@ -77,7 +77,7 @@ export function FloorTabs({ onRequestCreate, onRequestEdit }: FloorTabsProps) {
           key={floor.id}
           type="button"
           role="tab"
-          className={`floor-tab ${state.project.activeFloorId === floor.id ? "active" : ""}`}
+          className={`floor-tab ${state.project.activeFloorId === floor.id ? "active" : ""} ${floor.unconditioned ? "unconditioned" : ""}`}
           onClick={() => dispatch({ type: "SET_ACTIVE_FLOOR", floorId: floor.id })}
           onContextMenu={(event) => {
             event.preventDefault();

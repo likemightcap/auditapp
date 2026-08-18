@@ -58,6 +58,12 @@ export interface FloorData {
   id: string;
   name: string;
   unconditioned?: boolean;
+  duplicateConditionedBaseline?: Array<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }>;
   entities: MapEntity[];
   wallPoints: WallPoint[];
   wallSegments: WallSegment[];

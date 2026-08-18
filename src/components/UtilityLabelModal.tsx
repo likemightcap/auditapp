@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
-import type { CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export interface UtilityLabelSubmit {
   text: string;
@@ -17,17 +16,17 @@ interface UtilityLabelModalProps {
 
 const COLORS = ["WHITE", "BLUE", "RED", "YELLOW"] as const;
 
-function colorCellStyles(color: string): CSSProperties {
+function colorSwatch(color: string): { fill: string; border: string } {
   switch (color.toUpperCase()) {
     case "BLUE":
-      return { background: "#1117ff", color: "#ffffff" };
+      return { fill: "#1117ff", border: "#2c3e9d" };
     case "RED":
-      return { background: "#e00000", color: "#ffffff" };
+      return { fill: "#e00000", border: "#8c3030" };
     case "YELLOW":
-      return { background: "#ffed00", color: "#4c5452" };
+      return { fill: "#ffed00", border: "#b99f1d" };
     case "WHITE":
     default:
-      return { background: "#ffffff", color: "#6f8680" };
+      return { fill: "#ffffff", border: "#a9bfdc" };
   }
 }
 
@@ -39,6 +38,7 @@ export function UtilityLabelModal({
 }: UtilityLabelModalProps) {
   const [text, setText] = useState("");
   const [color, setColor] = useState("WHITE");
+  const textInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (!isOpen) {
@@ -47,6 +47,16 @@ export function UtilityLabelModal({
     setText((initialValues.text ?? "").toUpperCase());
     setColor(initialValues.color.toUpperCase());
   }, [initialValues, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      textInputRef.current?.focus();
+      textInputRef.current?.select();
+    });
+  }, [isOpen]);
 
   const canSubmit = useMemo(() => text.trim().length > 0, [text]);
 
@@ -62,23 +72,35 @@ export function UtilityLabelModal({
         <div className="modal-row">
           <label>TEXT:</label>
           <input
+            ref={textInputRef}
             className="text-content-input"
             type="text"
             value={text}
             onChange={(event) => setText(event.target.value.toUpperCase())}
             placeholder="Name this utility"
+            autoFocus
           />
         </div>
 
         <div className="modal-row">
           <label>COLOR:</label>
-          <select value={color} style={colorCellStyles(color)} onChange={(event) => setColor(event.target.value)}>
-            {COLORS.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
+          <div className="modal-chip-row" role="radiogroup" aria-label="Utility label color">
+            {COLORS.map((item) => {
+              const swatch = colorSwatch(item);
+              const active = color === item;
+              return (
+                <button
+                  key={item}
+                  type="button"
+                  className={`modal-color-chip ${active ? "is-active" : ""}`}
+                  style={{ backgroundColor: swatch.fill, borderColor: swatch.border }}
+                  onClick={() => setColor(item)}
+                  aria-label={item}
+                  aria-pressed={active}
+                />
+              );
+            })}
+          </div>
         </div>
 
         <div className="modal-actions">

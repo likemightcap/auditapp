@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
-import type { CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export interface TextModalSubmit {
   text: string;
@@ -11,41 +10,60 @@ export interface TextModalInitialValues extends TextModalSubmit {}
 
 interface TextModalProps {
   isOpen: boolean;
+  mode?: "create" | "edit";
   initialValues: TextModalInitialValues;
   onCancel: () => void;
   onSubmit: (payload: TextModalSubmit) => void;
 }
 
-const COLORS = ["WHITE", "BLUE", "RED", "YELLOW"] as const;
+const CREATE_COLORS = ["WHITE", "GREEN", "RED", "YELLOW"] as const;
+const EDIT_COLORS = ["WHITE", "GREEN", "RED", "YELLOW"] as const;
 const SIZES = ["small", "medium", "large"] as const;
 
-function colorCellStyles(color: string): CSSProperties {
+function colorSwatch(color: string): { fill: string; border: string } {
   switch (color.toUpperCase()) {
-    case "BLUE":
-      return { background: "#1117ff", color: "#ffffff" };
+    case "GREEN":
+      return { fill: "#00ff6a", border: "#0f9b4f" };
     case "RED":
-      return { background: "#e00000", color: "#ffffff" };
+      return { fill: "#e00000", border: "#8c3030" };
     case "YELLOW":
-      return { background: "#ffed00", color: "#4c5452" };
+      return { fill: "#ffed00", border: "#b99f1d" };
     case "WHITE":
     default:
-      return { background: "#ffffff", color: "#6f8680" };
+      return { fill: "#ffffff", border: "#a9bfdc" };
   }
 }
 
-export function TextModal({ isOpen, initialValues, onCancel, onSubmit }: TextModalProps) {
+export function TextModal({ isOpen, mode = "create", initialValues, onCancel, onSubmit }: TextModalProps) {
   const [text, setText] = useState("");
   const [color, setColor] = useState("WHITE");
   const [size, setSize] = useState<"small" | "medium" | "large">("medium");
+  const textInputRef = useRef<HTMLInputElement | null>(null);
+  const colors = mode === "edit" ? EDIT_COLORS : CREATE_COLORS;
 
   useEffect(() => {
     if (!isOpen) {
       return;
     }
     setText((initialValues.text ?? "").toUpperCase());
-    setColor(initialValues.color.toUpperCase());
+    const nextColor = initialValues.color.toUpperCase();
+    if (nextColor === "BLUE") {
+      setColor("GREEN");
+    } else {
+      setColor(nextColor);
+    }
     setSize((initialValues.size ?? "medium") as "small" | "medium" | "large");
-  }, [initialValues, isOpen]);
+  }, [initialValues, isOpen, mode]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      textInputRef.current?.focus();
+      textInputRef.current?.select();
+    });
+  }, [isOpen]);
 
   const canSubmit = useMemo(() => text.trim().length > 0, [text]);
 
@@ -61,34 +79,56 @@ export function TextModal({ isOpen, initialValues, onCancel, onSubmit }: TextMod
         <div className="modal-row">
           <label>TEXT:</label>
           <input
+            ref={textInputRef}
             className="text-content-input"
             type="text"
             value={text}
             onChange={(event) => setText(event.target.value.toUpperCase())}
             placeholder="Type label"
+            autoFocus
           />
         </div>
 
         <div className="modal-row">
           <label>COLOR:</label>
-          <select value={color} style={colorCellStyles(color)} onChange={(event) => setColor(event.target.value)}>
-            {COLORS.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
+          <div className="modal-chip-row" role="radiogroup" aria-label="Text color">
+            {colors.map((item) => {
+              const swatch = colorSwatch(item);
+              const active = color === item;
+              return (
+                <button
+                  key={item}
+                  type="button"
+                  className={`modal-color-chip ${active ? "is-active" : ""}`}
+                  style={{ backgroundColor: swatch.fill, borderColor: swatch.border }}
+                  onClick={() => setColor(item)}
+                  aria-label={item}
+                  aria-pressed={active}
+                />
+              );
+            })}
+          </div>
         </div>
 
         <div className="modal-row">
           <label>SIZE:</label>
-          <select value={size} onChange={(event) => setSize(event.target.value as "small" | "medium" | "large")}>
-            {SIZES.map((item) => (
-              <option key={item} value={item}>
-                {item.toUpperCase()}
-              </option>
-            ))}
-          </select>
+          <div className="modal-chip-row" role="radiogroup" aria-label="Text size">
+            {SIZES.map((item) => {
+              const active = size === item;
+              return (
+                <button
+                  key={item}
+                  type="button"
+                  className={`modal-size-chip modal-size-${item} ${active ? "is-active" : ""}`}
+                  onClick={() => setSize(item)}
+                  aria-label={item}
+                  aria-pressed={active}
+                >
+                  A
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         <div className="modal-actions">

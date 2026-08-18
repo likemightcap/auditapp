@@ -2,21 +2,29 @@ import { useEffect, useMemo, useState } from "react";
 
 const COMMON_LEVEL_NAMES = ["1st Floor", "2nd Floor", "Basement", "Attic"] as const;
 
+export interface DuplicateNameModalSubmit {
+  name: string;
+  unconditioned: boolean;
+}
+
 interface DuplicateNameModalProps {
   isOpen: boolean;
   initialName: string;
+  initialUnconditioned: boolean;
   onCancel: () => void;
-  onSubmit: (name: string) => void;
+  onSubmit: (payload: DuplicateNameModalSubmit) => void;
 }
 
 export function DuplicateNameModal({
   isOpen,
   initialName,
+  initialUnconditioned,
   onCancel,
   onSubmit,
 }: DuplicateNameModalProps) {
   const [name, setName] = useState("");
   const [commonLevel, setCommonLevel] = useState("");
+  const [unconditioned, setUnconditioned] = useState(false);
 
   useEffect(() => {
     if (!isOpen) {
@@ -24,7 +32,8 @@ export function DuplicateNameModal({
     }
     setName(initialName);
     setCommonLevel(COMMON_LEVEL_NAMES.includes(initialName as (typeof COMMON_LEVEL_NAMES)[number]) ? initialName : "");
-  }, [initialName, isOpen]);
+    setUnconditioned(initialUnconditioned);
+  }, [initialName, initialUnconditioned, isOpen]);
 
   const canSubmit = useMemo(() => name.trim().length > 0, [name]);
 
@@ -74,12 +83,24 @@ export function DuplicateNameModal({
           />
         </div>
 
+        <div className="modal-row">
+          <label>UNCONDITIONED:</label>
+          <label className="modal-checkbox rect-unconditioned-checkbox">
+            <input
+              type="checkbox"
+              checked={unconditioned}
+              onChange={(event) => setUnconditioned(event.target.checked)}
+            />
+            Exclude this level from totals
+          </label>
+        </div>
+
         <div className="modal-actions level-modal-actions">
           <button
             type="button"
             className="okay"
             disabled={!canSubmit}
-            onClick={() => onSubmit(name.trim())}
+            onClick={() => onSubmit({ name: name.trim(), unconditioned })}
           >
             DUPLICATE
           </button>

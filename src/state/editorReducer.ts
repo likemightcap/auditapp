@@ -30,7 +30,7 @@ export function createInitialProject(): Project {
     projectId: uid("project"),
     projectName: "New Assessment",
     address: "",
-    orientation: "S",
+    orientation: "N",
     averageCeilingHeightFt: 9,
     floors: [],
     activeFloorId: "",
@@ -709,6 +709,9 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
 
       const nextFloor = createInitialFloor(action.floorName);
       nextFloor.unconditioned = action.unconditioned;
+      nextFloor.duplicateConditionedBaseline = source.entities
+        .filter((entity) => entity.type === "rectangle" && !Boolean(entity.metadata.unconditioned))
+        .map((entity) => rectBoundsFromRectangle(entity));
       nextFloor.entities = cloneRectanglesForDuplicate(source);
 
       return withHistory(state, {

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ConfirmModal } from "./components/ConfirmModal";
 import { DuplicateNameModal } from "./components/DuplicateNameModal";
+import type { DuplicateNameModalSubmit } from "./components/DuplicateNameModal";
 import { FloorTabs } from "./components/FloorTabs";
 import { LeftToolbar } from "./components/LeftToolbar";
 import { LevelModal } from "./components/LevelModal";
@@ -307,7 +308,7 @@ function EditorShell() {
     });
   };
 
-  const confirmDuplicateLevel = (duplicateName: string) => {
+  const confirmDuplicateLevel = (payload: DuplicateNameModalSubmit) => {
     if (!duplicateLevelState) {
       return;
     }
@@ -315,8 +316,8 @@ function EditorShell() {
     dispatch({
       type: "DUPLICATE_LEVEL_RECTANGLES",
       floorId: duplicateLevelState.sourceFloorId,
-      floorName: duplicateName,
-      unconditioned: duplicateLevelState.unconditioned,
+      floorName: payload.name,
+      unconditioned: payload.unconditioned,
     });
     setDuplicateLevelState(null);
     setLevelModalState(null);
@@ -426,6 +427,7 @@ function EditorShell() {
       <DuplicateNameModal
         isOpen={duplicateLevelState !== null}
         initialName={duplicateLevelState?.initialName ?? ""}
+        initialUnconditioned={duplicateLevelState?.unconditioned ?? false}
         onCancel={() => setDuplicateLevelState(null)}
         onSubmit={confirmDuplicateLevel}
       />

@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
-import type { CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export type CeilingType = "standard" | "cathedral" | "cathedral-horizontal" | "sloped" | "sloped-horizontal" | "none";
 
@@ -41,23 +40,23 @@ function defaultRectangleColorForOptions(unconditioned: boolean, ceilingType: Ce
     ceilingType === "sloped" ||
     ceilingType === "sloped-horizontal"
   ) {
-    return "YELLOW";
+    return "GREEN";
   }
   return "BLUE";
 }
 
-function colorCellStyles(color: string): CSSProperties {
+function colorSwatch(color: string): { fill: string; border: string } {
   switch (color.toUpperCase()) {
     case "BLUE":
-      return { background: "#2f8eff", color: "#ffffff" };
+      return { fill: "#2f8eff", border: "#2a62a8" };
     case "GREEN":
-      return { background: "#2ab56a", color: "#ffffff" };
+      return { fill: "#2ab56a", border: "#2a8a58" };
     case "RED":
-      return { background: "#d94a43", color: "#ffffff" };
+      return { fill: "#d94a43", border: "#9f4945" };
     case "YELLOW":
-      return { background: "#f2ca45", color: "#4c5452" };
+      return { fill: "#f2ca45", border: "#b28d2d" };
     default:
-      return { background: "#2f8eff", color: "#ffffff" };
+      return { fill: "#2f8eff", border: "#2a62a8" };
   }
 }
 
@@ -110,6 +109,7 @@ export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: Re
   const [lowHeightFt, setLowHeightFt] = useState(8);
   const [highHeightFt, setHighHeightFt] = useState(12);
   const [colorManuallySet, setColorManuallySet] = useState(false);
+  const labelInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (!isOpen) {
@@ -126,6 +126,16 @@ export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: Re
     setHighHeightFt(clampToPositiveInt(initialValues.highHeightFt));
     setColorManuallySet(false);
   }, [initialValues, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      labelInputRef.current?.focus();
+      labelInputRef.current?.select();
+    });
+  }, [isOpen]);
 
   const canSubmit = useMemo(() => {
     if (widthFt < 1 || heightFt < 1) {
@@ -165,29 +175,37 @@ export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: Re
         <div className="modal-row">
           <label>LABEL:</label>
           <input
+            ref={labelInputRef}
             type="text"
             value={label}
             onChange={(event) => setLabel(event.target.value)}
             placeholder="Optional"
+            autoFocus
           />
         </div>
 
         <div className="modal-row">
           <label>COLOR:</label>
-          <select
-            value={color}
-            style={colorCellStyles(color)}
-            onChange={(event) => {
-              setColor(event.target.value);
-              setColorManuallySet(true);
-            }}
-          >
-            {COLORS.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
+          <div className="modal-chip-row" role="radiogroup" aria-label="Rectangle color">
+            {COLORS.map((item) => {
+              const swatch = colorSwatch(item);
+              const active = color === item;
+              return (
+                <button
+                  key={item}
+                  type="button"
+                  className={`modal-color-chip ${active ? "is-active" : ""}`}
+                  style={{ backgroundColor: swatch.fill, borderColor: swatch.border }}
+                  onClick={() => {
+                    setColor(item);
+                    setColorManuallySet(true);
+                  }}
+                  aria-label={item}
+                  aria-pressed={active}
+                />
+              );
+            })}
+          </div>
         </div>
 
         <div className="modal-row">
@@ -202,7 +220,7 @@ export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: Re
 
         <div className="modal-row">
           <label>UNCONDITIONED:</label>
-          <label className="modal-checkbox" htmlFor="rectUnconditioned">
+          <label className="modal-checkbox rect-unconditioned-checkbox" htmlFor="rectUnconditioned">
             <input
               id="rectUnconditioned"
               type="checkbox"

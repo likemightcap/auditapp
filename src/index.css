@@ -726,8 +726,8 @@ select {
   -webkit-touch-callout: none;
 }
 
-.workspace.workspace-resize-cursor-active,
-.workspace.workspace-resize-cursor-active * {
+.workspace.workspace-custom-cursor-active,
+.workspace.workspace-custom-cursor-active * {
   cursor: none !important;
 }
 
@@ -1114,6 +1114,77 @@ select {
   transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 
+.modal-chip-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  flex-wrap: wrap;
+}
+
+.modal-color-chip {
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  border: 2px solid #90acd4;
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.62);
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease, filter 120ms ease;
+}
+
+.modal-color-chip:hover {
+  transform: translateY(-1px);
+}
+
+.modal-color-chip.is-active {
+  border-color: #153f7b;
+  box-shadow:
+    0 0 0 3px rgba(21, 63, 123, 0.45),
+    0 0 0 6px rgba(132, 178, 244, 0.55),
+    inset 0 0 0 2px rgba(255, 255, 255, 0.85),
+    inset 0 1px 1px rgba(255, 255, 255, 0.62);
+  filter: saturate(1.08) contrast(1.05);
+}
+
+.modal-size-chip {
+  min-width: 44px;
+  min-height: 36px;
+  padding: 0 10px;
+  border: 1px solid #c5d6ec;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #2f4f7e;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0;
+  transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.modal-size-chip:hover {
+  transform: translateY(-1px);
+}
+
+.modal-size-chip.is-active {
+  border-color: #113f7f;
+  background: linear-gradient(180deg, #2b67b3 0%, #1b4f96 100%);
+  color: #ffffff;
+  box-shadow:
+    0 0 0 3px rgba(27, 79, 150, 0.35),
+    0 0 0 6px rgba(137, 183, 245, 0.46),
+    0 4px 10px rgba(28, 62, 113, 0.24);
+}
+
+.modal-size-small {
+  font-size: 0.9rem;
+}
+
+.modal-size-medium {
+  font-size: 1.1rem;
+}
+
+.modal-size-large {
+  font-size: 1.3rem;
+}
+
 .modal-inline-button {
   border: 1px solid #c5d6ec;
   border-radius: 10px;
@@ -1165,6 +1236,11 @@ select {
   accent-color: #6e8b84;
   box-shadow: none;
   border: 1px solid #8ea7a1;
+}
+
+.rect-unconditioned-checkbox input {
+  accent-color: #28508c;
+  border-color: #476da5;
 }
 
 .stepper {
@@ -1376,35 +1452,59 @@ select {
   min-height: 42px;
   border-radius: 10px;
   border: 1px solid #d4e0ef;
-  background: var(--bg-tab);
-  color: #2b4e7e;
-  font-size: 0.92rem;
-  font-family: var(--font-title);
-  letter-spacing: 0.01em;
+  background: linear-gradient(180deg, #ffffff 0%, #eff5fe 100%);
+  color: #264577;
+  font-size: 0.78rem;
+  font-family: var(--font-main);
+  font-weight: 900;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  box-shadow: 0 2px 8px rgba(34, 67, 109, 0.08);
+  transition: transform 120ms ease, filter 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
   cursor: pointer;
 }
 
+.floor-tab:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.02);
+  box-shadow: 0 5px 14px rgba(48, 83, 133, 0.16);
+}
+
 .floor-tab.active {
-  background: #ffffff;
-  color: #1f3f6d;
-  border-color: #c6d7ec;
-  box-shadow: 0 3px 10px rgba(37, 76, 131, 0.13);
+  background: linear-gradient(180deg, #1f5cab 0%, #17488c 100%);
+  color: #ffffff;
+  border-color: #1a4f97;
+  box-shadow: 0 6px 15px rgba(44, 74, 119, 0.24);
+}
+
+.floor-tab.unconditioned {
+  background: linear-gradient(180deg, #ffffff 0%, #eff5fe 100%);
+  color: #b13b3b;
+  border-color: #d7a7a7;
+  box-shadow: 0 2px 8px rgba(109, 31, 31, 0.1);
+}
+
+.floor-tab.unconditioned.active {
+  background: linear-gradient(180deg, #c64646 0%, #a73737 100%);
+  color: #ffffff;
+  border-color: #942f2f;
+  box-shadow: 0 6px 15px rgba(109, 31, 31, 0.3);
 }
 
 .floor-tab.add {
   min-width: 90px;
-  background: linear-gradient(180deg, #255ba7 0%, #184a8f 100%);
-  border-color: #184a8f;
+  background: linear-gradient(180deg, #2aa957 0%, #1f8a47 100%);
+  border-color: #1f8a47;
   color: #ffffff;
 }
 
 .floor-tab.install {
   margin-left: auto;
   min-width: 136px;
-  border-color: #c4d5ec;
-  background: linear-gradient(180deg, #f8fbff 0%, #edf3fc 100%);
-  color: #2d507f;
-  font-size: 0.86rem;
+  border-color: #d4e0ef;
+  background: linear-gradient(180deg, #ffffff 0%, #eff5fe 100%);
+  color: #264577;
+  font-size: 0.78rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -1435,6 +1535,127 @@ select {
   .workspace-hud {
     flex-direction: column;
     gap: 5px;
+  }
+}
+
+@media (max-width: 640px), (max-height: 520px) {
+  .stage-header {
+    height: 46px;
+    padding: 0 10px;
+  }
+
+  .stage-header h1 {
+    font-size: 1.34rem;
+    letter-spacing: 0.01em;
+  }
+
+  .stage-header-level {
+    font-size: 0.82rem;
+    margin-left: 5px;
+  }
+
+  .workspace-orientation-btn,
+  .workspace-edit-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+  }
+
+  .workspace-orientation-btn {
+    left: 10px;
+    bottom: 10px;
+  }
+
+  .workspace-edit-btn {
+    top: 10px;
+    right: 10px;
+  }
+
+  .workspace-edit-btn-icon {
+    width: 16px;
+    height: 16px;
+  }
+
+  .workspace-camera-controls {
+    right: 8px;
+    bottom: 8px;
+    gap: 6px;
+    padding: 7px 6px;
+    border-radius: 10px;
+  }
+
+  .workspace-camera-controls.is-collapsed {
+    padding: 6px;
+  }
+
+  .workspace-zoom-slider-wrap {
+    width: 24px;
+    height: 108px;
+  }
+
+  .workspace-zoom-slider {
+    width: 94px;
+    height: 22px;
+  }
+
+  .workspace-zoom-slider::-webkit-slider-thumb {
+    width: 14px;
+    height: 14px;
+    margin-top: -4px;
+  }
+
+  .workspace-zoom-slider::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+  }
+
+  .workspace-frame-btn,
+  .workspace-eye-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+  }
+
+  .workspace-frame-btn svg,
+  .workspace-eye-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  .floor-tabs {
+    height: 52px;
+    gap: 4px;
+    padding: 6px 6px;
+  }
+
+  .floor-tabs-left {
+    gap: 4px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .floor-tabs-left::-webkit-scrollbar {
+    display: none;
+  }
+
+  .floor-tab {
+    min-width: 84px;
+    min-height: 36px;
+    padding: 0 8px;
+    font-size: 0.66rem;
+    letter-spacing: 0.04em;
+    flex: 0 0 auto;
+  }
+
+  .floor-tab.add {
+    min-width: 74px;
+  }
+
+  .floor-tab.install {
+    min-width: 108px;
+    font-size: 0.64rem;
+    letter-spacing: 0.035em;
   }
 }
 

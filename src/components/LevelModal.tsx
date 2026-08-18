@@ -100,7 +100,7 @@ export function LevelModal({
 
         <div className="modal-row">
           <label>UNCONDITIONED:</label>
-          <label className="modal-checkbox">
+          <label className="modal-checkbox rect-unconditioned-checkbox">
             <input
               type="checkbox"
               checked={unconditioned}
