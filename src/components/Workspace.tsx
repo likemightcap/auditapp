@@ -1123,6 +1123,11 @@ interface OverflowOutlineSegment {
   y2: number;
 }
 
+interface OverflowOutlinePoint {
+  x: number;
+  y: number;
+}
+
 interface DuplicateOverflowRegion {
   cells: RectBounds[];
   minX: number;
@@ -1130,6 +1135,72 @@ interface DuplicateOverflowRegion {
   maxX: number;
   maxY: number;
   outline: OverflowOutlineSegment[];
+}
+
+function buildOverflowOutlineLoops(outline: OverflowOutlineSegment[]): OverflowOutlinePoint[][] {
+  if (outline.length === 0) {
+    return [];
+  }
+
+  const keyFor = (x: number, y: number) => `${x},${y}`;
+  const parsePoint = (key: string): OverflowOutlinePoint => {
+    const [x, y] = key.split(",").map(Number);
+    return { x, y };
+  };
+  const edgeKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`);
+
+  const adjacency = new Map<string, Set<string>>();
+  const unusedEdges = new Set<string>();
+
+  for (const segment of outline) {
+    const a = keyFor(segment.x1, segment.y1);
+    const b = keyFor(segment.x2, segment.y2);
+    if (!adjacency.has(a)) {
+      adjacency.set(a, new Set());
+    }
+    if (!adjacency.has(b)) {
+      adjacency.set(b, new Set());
+    }
+    adjacency.get(a)?.add(b);
+    adjacency.get(b)?.add(a);
+    unusedEdges.add(edgeKey(a, b));
+  }
+
+  const loops: OverflowOutlinePoint[][] = [];
+
+  while (unusedEdges.size > 0) {
+    const firstEdge = unusedEdges.values().next().value as string;
+    const [startKey, nextKey] = firstEdge.split("|");
+    unusedEdges.delete(firstEdge);
+
+    const loopKeys = [startKey, nextKey];
+    let previousKey = startKey;
+    let currentKey = nextKey;
+
+    while (currentKey !== startKey) {
+      const neighbors = [...(adjacency.get(currentKey) ?? [])];
+      const candidate = neighbors.find((neighbor) => {
+        if (neighbor === previousKey) {
+          return false;
+        }
+        return unusedEdges.has(edgeKey(currentKey, neighbor));
+      });
+
+      if (!candidate) {
+        break;
+      }
+
+      unusedEdges.delete(edgeKey(currentKey, candidate));
+      loopKeys.push(candidate);
+      previousKey = currentKey;
+      currentKey = candidate;
+    }
+
+    const points = loopKeys.map(parsePoint);
+    loops.push(points);
+  }
+
+  return loops;
 }
 
 function buildDuplicateOverflowRegions(cells: RectBounds[]): DuplicateOverflowRegion[] {
@@ -5100,6 +5171,7 @@ export function Workspace() {
                                 const labelCenterX = (region.minX + region.maxX) / 2 - entity.x;
                                 const labelCenterY = (region.minY + region.maxY) / 2 - entity.y;
                                 const regionAreaFt2 = region.cells.length;
+                                const outlineLoops = buildOverflowOutlineLoops(region.outline);
                                 const labelFontSize = clampValue(
                                   Math.min(region.maxX - region.minX, region.maxY - region.minY) * 0.22,
                                   0.34,
@@ -5127,18 +5199,28 @@ export function Workspace() {
                                       </g>
                                     ))}
 
-                                    {region.outline.map((segment, segmentIndex) => (
-                                      <line
-                                        key={`${entity.id}-dup-overflow-outline-${regionIndex}-${segmentIndex}`}
-                                        x1={segment.x1 - entity.x}
-                                        y1={segment.y1 - entity.y}
-                                        x2={segment.x2 - entity.x}
-                                        y2={segment.y2 - entity.y}
-                                        stroke="#b58518"
-                                        strokeWidth={0.12}
-                                        shapeRendering="crispEdges"
-                                      />
-                                    ))}
+                                    {outlineLoops.map((loop, loopIndex) => {
+                                      const pathData = loop
+                                        .map((point, pointIndex) => {
+                                          const x = point.x - entity.x;
+                                          const y = point.y - entity.y;
+                                          return `${pointIndex === 0 ? "M" : "L"} ${x} ${y}`;
+                                        })
+                                        .join(" ");
+
+                                      return (
+                                        <path
+                                          key={`${entity.id}-dup-overflow-outline-${regionIndex}-${loopIndex}`}
+                                          d={`${pathData} Z`}
+                                          fill="none"
+                                          stroke="#b58518"
+                                          strokeWidth={0.08}
+                                          strokeLinejoin="round"
+                                          strokeLinecap="round"
+                                          vectorEffect="non-scaling-stroke"
+                                        />
+                                      );
+                                    })}
 
                                     <text
                                       x={labelCenterX}
