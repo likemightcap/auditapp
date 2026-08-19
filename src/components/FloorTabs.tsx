@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { sortFloorsByPresetOrder } from "../constants/floors";
 import { useEditor } from "../state/EditorContext";
 
 interface BeforeInstallPromptEvent extends Event {
@@ -14,6 +15,7 @@ interface FloorTabsProps {
 
 export function FloorTabs({ onRequestCreate, onRequestEdit }: FloorTabsProps) {
   const { state, dispatch } = useEditor();
+  const orderedFloors = sortFloorsByPresetOrder(state.project.floors);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const longPressPointerIdRef = useRef<number | null>(null);
   const longPressStartRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -72,7 +74,7 @@ export function FloorTabs({ onRequestCreate, onRequestEdit }: FloorTabsProps) {
   return (
     <div className="floor-tabs" role="tablist" aria-label="Floors">
       <div className="floor-tabs-left">
-      {state.project.floors.map((floor) => (
+      {orderedFloors.map((floor) => (
         <button
           key={floor.id}
           type="button"

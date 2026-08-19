@@ -19,6 +19,7 @@ import { useEditor } from "../state/EditorContext";
 import { createEntityFromTool, createWallPoint, createWallSegment } from "../state/editorReducer";
 import { getToolDefinition } from "../tools/toolDefinitions";
 import { getUtilityIconByEntityType, isUtilityEntityType } from "../assets/utilityIcons";
+import { inferFloorPresetFromName, isAtticPreset, sortFloorsByPresetOrder } from "../constants/floors";
 import type { MapEntity, Orientation, Point, WallPoint, WallSegment } from "../types";
 import {
   clamp,
@@ -106,6 +107,7 @@ const SINGLE_DOOR_VISUAL_WIDTH = 3;
 const DOUBLE_DOOR_VISUAL_WIDTH = 6;
 const EDGE_MATCH_EPSILON = 0.001;
 const RECT_DRAW_START_EDGE_SNAP_THRESHOLD = 3;
+const RECT_EDGE_SNAP_THRESHOLD = 3;
 const OPENING_PLACEMENT_SNAP_THRESHOLD = 3;
 const OPENING_PREVIEW_SNAP_THRESHOLD = 3;
 const OPENING_PLACEMENT_PREVIEW_ID = "__opening-placement-preview__";
@@ -1059,6 +1061,175 @@ function rectBoundsFromEntity(entity: MapEntity): RectBounds {
     y: y1,
     width: Math.abs(entity.width),
     height: Math.abs(entity.height),
+  };
+}
+
+function rangesOverlapStrict(startA: number, endA: number, startB: number, endB: number): boolean {
+  return Math.min(endA, endB) > Math.max(startA, startB);
+}
+
+function areRectanglesEdgeConnected(a: RectBounds, b: RectBounds): boolean {
+  const aRight = a.x + a.width;
+  const aBottom = a.y + a.height;
+  const bRight = b.x + b.width;
+  const bBottom = b.y + b.height;
+
+  const verticalTouch =
+    (nearlyEqualEdge(aRight, b.x) || nearlyEqualEdge(bRight, a.x)) &&
+    rangesOverlapStrict(a.y, aBottom, b.y, bBottom);
+  if (verticalTouch) {
+    return true;
+  }
+
+  const horizontalTouch =
+    (nearlyEqualEdge(aBottom, b.y) || nearlyEqualEdge(bBottom, a.y)) &&
+    rangesOverlapStrict(a.x, aRight, b.x, bRight);
+  return horizontalTouch;
+}
+
+function isRectangleConnectedToAny(
+  rect: RectBounds,
+  rectangles: MapEntity[],
+  excludeRectId?: string,
+): boolean {
+  for (const rectangle of rectangles) {
+    if (rectangle.type !== "rectangle" || rectangle.id === excludeRectId) {
+      continue;
+    }
+    if (areRectanglesEdgeConnected(rect, rectBoundsFromEntity(rectangle))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function snapRectTranslationToNearbyEdges(
+  rect: RectBounds,
+  rectangles: MapEntity[],
+  threshold: number,
+  excludeRectId?: string,
+): RectBounds {
+  const xCandidates: number[] = [];
+  const yCandidates: number[] = [];
+
+  for (const rectangle of rectangles) {
+    if (rectangle.id === excludeRectId || rectangle.type !== "rectangle") {
+      continue;
+    }
+    const other = rectBoundsFromEntity(rectangle);
+    xCandidates.push(other.x, other.x + other.width);
+    yCandidates.push(other.y, other.y + other.height);
+  }
+
+  let bestDx = 0;
+  let bestDxDistance = Number.POSITIVE_INFINITY;
+  for (const ownX of [rect.x, rect.x + rect.width]) {
+    for (const targetX of xCandidates) {
+      const dx = targetX - ownX;
+      const distance = Math.abs(dx);
+      if (distance <= threshold && distance < bestDxDistance) {
+        bestDx = dx;
+        bestDxDistance = distance;
+      }
+    }
+  }
+
+  let bestDy = 0;
+  let bestDyDistance = Number.POSITIVE_INFINITY;
+  for (const ownY of [rect.y, rect.y + rect.height]) {
+    for (const targetY of yCandidates) {
+      const dy = targetY - ownY;
+      const distance = Math.abs(dy);
+      if (distance <= threshold && distance < bestDyDistance) {
+        bestDy = dy;
+        bestDyDistance = distance;
+      }
+    }
+  }
+
+  return {
+    x: rect.x + bestDx,
+    y: rect.y + bestDy,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
+function snapRectResizeToNearbyEdges(
+  rect: RectBounds,
+  handle: ResizeHandle,
+  rectangles: MapEntity[],
+  threshold: number,
+  excludeRectId?: string,
+): RectBounds {
+  const xCandidates: number[] = [];
+  const yCandidates: number[] = [];
+
+  for (const rectangle of rectangles) {
+    if (rectangle.id === excludeRectId || rectangle.type !== "rectangle") {
+      continue;
+    }
+    const other = rectBoundsFromEntity(rectangle);
+    xCandidates.push(other.x, other.x + other.width);
+    yCandidates.push(other.y, other.y + other.height);
+  }
+
+  const bestSnap = (value: number, candidates: number[]): number => {
+    let bestValue = value;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const candidate of candidates) {
+      const distance = Math.abs(candidate - value);
+      if (distance <= threshold && distance < bestDistance) {
+        bestDistance = distance;
+        bestValue = candidate;
+      }
+    }
+    return bestValue;
+  };
+
+  let x1 = rect.x;
+  let y1 = rect.y;
+  let x2 = rect.x + rect.width;
+  let y2 = rect.y + rect.height;
+
+  const moveWest = handle === "w" || handle === "nw" || handle === "sw";
+  const moveEast = handle === "e" || handle === "ne" || handle === "se";
+  const moveNorth = handle === "n" || handle === "nw" || handle === "ne";
+  const moveSouth = handle === "s" || handle === "sw" || handle === "se";
+
+  if (moveWest && !moveEast) {
+    x1 = bestSnap(x1, xCandidates);
+  }
+  if (moveEast && !moveWest) {
+    x2 = bestSnap(x2, xCandidates);
+  }
+  if (moveNorth && !moveSouth) {
+    y1 = bestSnap(y1, yCandidates);
+  }
+  if (moveSouth && !moveNorth) {
+    y2 = bestSnap(y2, yCandidates);
+  }
+
+  if (x2 < x1 + 1) {
+    if (moveWest && !moveEast) {
+      x1 = x2 - 1;
+    } else {
+      x2 = x1 + 1;
+    }
+  }
+  if (y2 < y1 + 1) {
+    if (moveNorth && !moveSouth) {
+      y1 = y2 - 1;
+    } else {
+      y2 = y1 + 1;
+    }
+  }
+
+  return {
+    x: x1,
+    y: y1,
+    width: Math.max(1, x2 - x1),
+    height: Math.max(1, y2 - y1),
   };
 }
 
@@ -2266,6 +2437,7 @@ export function Workspace() {
     };
   const { state, dispatch } = useEditor();
   const floor = getFloor(state);
+  const isActiveFloorAttic = isAtticPreset(floor.floorPreset ?? inferFloorPresetFromName(floor.name));
   const rectangleStickyMode = Boolean(state.project.metadata.rectangleStickyMode);
 
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -2909,6 +3081,11 @@ export function Workspace() {
     setHoverWorld(world);
 
     if (state.activeTool === "rectangle") {
+      const containingRectangle = findRectangleContainingPoint(world, rectangleEntities);
+      if (containingRectangle) {
+        return;
+      }
+
       const baseStart = snapPointToGrid(world);
       const snappedStart = snapRectangleStartToNearbyEdge(baseStart, rectangleEntities);
       const nextEntity = createEntityFromTool("rectangle", snappedStart.x, snappedStart.y);
@@ -3235,17 +3412,41 @@ export function Workspace() {
       }
 
       if (interaction.entitySnapshot.type === "rectangle") {
-        const snapped = snapPointToGrid({
+        const snappedPoint = snapPointToGrid({
           x: interaction.entitySnapshot.x + dx,
           y: interaction.entitySnapshot.y + dy,
         });
+        const sourceRect = rectBoundsFromEntity(interaction.entitySnapshot);
+        const snapEnabled = !isRectangleConnectedToAny(
+          sourceRect,
+          rectangleEntities,
+          interaction.entitySnapshot.id,
+        );
+        const movedRect = snapEnabled
+          ? snapRectTranslationToNearbyEdges(
+              {
+                x: snappedPoint.x,
+                y: snappedPoint.y,
+                width: sourceRect.width,
+                height: sourceRect.height,
+              },
+              rectangleEntities,
+              RECT_EDGE_SNAP_THRESHOLD,
+              interaction.entitySnapshot.id,
+            )
+          : {
+              x: snappedPoint.x,
+              y: snappedPoint.y,
+              width: sourceRect.width,
+              height: sourceRect.height,
+            };
 
         dispatch({
           type: "SET_PREVIEW_ENTITY",
           entity: {
             ...interaction.entitySnapshot,
-            x: snapped.x,
-            y: snapped.y,
+            x: movedRect.x,
+            y: movedRect.y,
           },
         });
         return;
@@ -3291,11 +3492,22 @@ export function Workspace() {
             }
           : rectBoundsFromEntity(interaction.entitySnapshot);
       const resizedRect = applyRectResize(sourceRect, world, interaction.resizeHandle);
+      const snapEnabled =
+        interaction.entitySnapshot.type === "rectangle" &&
+        !isRectangleConnectedToAny(sourceRect, rectangleEntities, interaction.entitySnapshot.id);
       const nextRect =
         interaction.entitySnapshot.type === "rectangle"
           ? clampRectResizeToAttachedOpenings(
               sourceRect,
-              resizedRect,
+              snapEnabled
+                ? snapRectResizeToNearbyEdges(
+                    resizedRect,
+                    interaction.resizeHandle,
+                    rectangleEntities,
+                    RECT_EDGE_SNAP_THRESHOLD,
+                    interaction.entitySnapshot.id,
+                  )
+                : resizedRect,
               interaction.entitySnapshot.id,
               interaction.resizeHandle,
               floor.entities,
@@ -3469,8 +3681,50 @@ export function Workspace() {
         width: Math.max(1, maxX - minX),
         height: Math.max(1, maxY - minY),
       };
-      setDraftEntity(nextDraft);
-      dispatch({ type: "SET_PREVIEW_ENTITY", entity: nextDraft });
+      const moveWest = end.x < start.x;
+      const moveEast = end.x > start.x;
+      const moveNorth = end.y < start.y;
+      const moveSouth = end.y > start.y;
+
+      let drawHandle: ResizeHandle = "se";
+      if (moveNorth && moveWest) {
+        drawHandle = "nw";
+      } else if (moveNorth && moveEast) {
+        drawHandle = "ne";
+      } else if (moveSouth && moveWest) {
+        drawHandle = "sw";
+      } else if (moveSouth && moveEast) {
+        drawHandle = "se";
+      } else if (moveWest) {
+        drawHandle = "w";
+      } else if (moveEast) {
+        drawHandle = "e";
+      } else if (moveNorth) {
+        drawHandle = "n";
+      } else if (moveSouth) {
+        drawHandle = "s";
+      }
+
+      const snappedDraftRect = snapRectResizeToNearbyEdges(
+        {
+          x: nextDraft.x,
+          y: nextDraft.y,
+          width: Math.max(1, Math.abs(nextDraft.width)),
+          height: Math.max(1, Math.abs(nextDraft.height)),
+        },
+        drawHandle,
+        rectangleEntities,
+        RECT_EDGE_SNAP_THRESHOLD,
+      );
+      const snappedDraft = {
+        ...nextDraft,
+        x: snappedDraftRect.x,
+        y: snappedDraftRect.y,
+        width: snappedDraftRect.width,
+        height: snappedDraftRect.height,
+      };
+      setDraftEntity(snappedDraft);
+      dispatch({ type: "SET_PREVIEW_ENTITY", entity: snappedDraft });
       return;
     }
 
@@ -3894,24 +4148,46 @@ export function Workspace() {
         return;
       }
 
-      const world = getEventWorld(event);
-      const baseStart = snapPointToGrid(world);
-      const snappedStart = snapRectangleStartToNearbyEdge(baseStart, rectangleEntities);
-      const nextEntity = createEntityFromTool("rectangle", snappedStart.x, snappedStart.y);
-      nextEntity.width = 1;
-      nextEntity.height = 1;
+      if (entity.type === "rectangle") {
+        const world = getEventWorld(event);
+        const bounds = rectBoundsFromEntity(entity);
+        const distanceToNearestEdge = Math.min(
+          Math.abs(world.x - bounds.x),
+          Math.abs(bounds.x + bounds.width - world.x),
+          Math.abs(world.y - bounds.y),
+          Math.abs(bounds.y + bounds.height - world.y),
+        );
 
-      interactionRef.current = {
-        type: "draw-rect",
-        pointerId: event.pointerId,
-        pointerType: event.pointerType,
-        startScreen: { x: event.clientX, y: event.clientY },
-        startWorld: snappedStart,
-        entitySnapshot: nextEntity,
-        sourceRectangleId: entity.type === "rectangle" ? entity.id : undefined,
-        dragStarted: false,
-      };
-      svgRef.current?.setPointerCapture(event.pointerId);
+        if (distanceToNearestEdge <= RECT_DRAW_START_EDGE_SNAP_THRESHOLD) {
+          const baseStart = snapPointToGrid(world);
+          const snappedStart = snapRectangleStartToNearbyEdge(baseStart, rectangleEntities);
+          const nextEntity = createEntityFromTool("rectangle", snappedStart.x, snappedStart.y);
+          nextEntity.width = 1;
+          nextEntity.height = 1;
+
+          startRectangleCanvasLongPress(
+            event.pointerId,
+            snappedStart,
+            { x: event.clientX, y: event.clientY },
+          );
+
+          interactionRef.current = {
+            type: "draw-rect",
+            pointerId: event.pointerId,
+            pointerType: event.pointerType,
+            startScreen: { x: event.clientX, y: event.clientY },
+            startWorld: snappedStart,
+            entitySnapshot: nextEntity,
+            sourceRectangleId: entity.id,
+            dragStarted: false,
+          };
+          svgRef.current?.setPointerCapture(event.pointerId);
+          return;
+        }
+
+        dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: entity.id } });
+        return;
+      }
       return;
     }
 
@@ -3936,22 +4212,7 @@ export function Workspace() {
           return;
         }
 
-        if (isSlidingDoor(entity)) {
-          dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: entity.id } });
-          return;
-        }
-
-        const flipped = Boolean(entity.metadata.flipped);
-        const updated: MapEntity = {
-          ...entity,
-          rotation: edgeRotation((entity.metadata.edge as RectEdge | undefined) ?? "top"),
-          metadata: {
-            ...entity.metadata,
-            flipped: !flipped,
-          },
-        };
-        dispatch({ type: "UPSERT_ENTITY", entity: updated });
-        dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: updated.id } });
+        dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: entity.id } });
         return;
       }
 
@@ -4055,22 +4316,17 @@ export function Workspace() {
         return;
       }
 
-      if (isSlidingDoor(entity)) {
-        dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: entity.id } });
-        return;
-      }
-
-      const flipped = Boolean(entity.metadata.flipped);
-      const updated: MapEntity = {
-        ...entity,
-        rotation: edgeRotation((entity.metadata.edge as RectEdge | undefined) ?? "top"),
-        metadata: {
-          ...entity.metadata,
-          flipped: !flipped,
-        },
+      interactionRef.current = {
+        type: "pan",
+        pointerId: event.pointerId,
+        pointerType: event.pointerType,
+        startScreen: { x: event.clientX, y: event.clientY },
+        startWorld: world,
+        dragStarted: false,
+        tapAction: "select-entity",
+        targetId: entity.id,
       };
-      dispatch({ type: "UPSERT_ENTITY", entity: updated });
-      dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: updated.id } });
+      svgRef.current?.setPointerCapture(event.pointerId);
       return;
     }
 
@@ -4341,7 +4597,22 @@ export function Workspace() {
 
   const renderedNonTextEntities = displayEntities.filter((entity) => entity.type !== "text");
   const renderedTextEntities = displayEntities.filter((entity) => entity.type === "text");
-  const duplicateConditionedBaseline = floor.duplicateConditionedBaseline ?? null;
+  const duplicateConditionedBaseline = useMemo(() => {
+    const orderedFloors = sortFloorsByPresetOrder(state.project.floors);
+    const activeIndex = orderedFloors.findIndex((candidate) => candidate.id === floor.id);
+    if (activeIndex <= 0) {
+      return null;
+    }
+
+    const supportingFloor = orderedFloors[activeIndex - 1];
+    if (!supportingFloor) {
+      return null;
+    }
+
+    return supportingFloor.entities
+      .filter((entity) => entity.type === "rectangle" && !Boolean(entity.metadata.unconditioned))
+      .map((entity) => rectBoundsFromEntity(entity));
+  }, [floor.id, state.project.floors]);
   const hideLinearMarkers =
     interactionRef.current.type === "draw-rect" ||
     (interactionRef.current.type === "resize-rect" && interactionRef.current.entitySnapshot?.type === "rectangle") ||
@@ -4820,7 +5091,6 @@ export function Workspace() {
                                   stroke="#ffffff"
                                   strokeWidth={0.22}
                                 />
-                                <line x1={0} y1={0} x2={0} y2={halfLeaf} stroke="#ffffff" strokeWidth={0.14} />
                                 <line
                                   x1={-doorVisualWidth / 2}
                                   y1={0}
@@ -5246,7 +5516,7 @@ export function Workspace() {
                                       strokeWidth={0.028}
                                       paintOrder="stroke"
                                     >
-                                      {`${regionAreaFt2} SF`}
+                                      {`${regionAreaFt2} FT²`}
                                     </text>
                                   </g>
                                 );
@@ -5903,6 +6173,7 @@ export function Workspace() {
 
       <RectangleModal
         isOpen={rectangleModalState !== null}
+        isAtticFloor={isActiveFloorAttic}
         initialValues={rectangleModalState?.initialValues ?? DEFAULT_RECTANGLE_MODAL_VALUES}
         onCancel={() => setRectangleModalState(null)}
         onSubmit={(payload: RectangleModalSubmit) => {
@@ -5912,11 +6183,11 @@ export function Workspace() {
 
           const metadata = {
             color: payload.color,
-            unconditioned: payload.unconditioned,
-            ceilingType: payload.ceilingType,
-            standardHeightFt: payload.standardHeightFt,
-            lowHeightFt: payload.lowHeightFt,
-            highHeightFt: payload.highHeightFt,
+            unconditioned: isActiveFloorAttic ? false : payload.unconditioned,
+            ceilingType: isActiveFloorAttic ? "standard" : payload.ceilingType,
+            standardHeightFt: isActiveFloorAttic ? 8 : payload.standardHeightFt,
+            lowHeightFt: isActiveFloorAttic ? 8 : payload.lowHeightFt,
+            highHeightFt: isActiveFloorAttic ? 12 : payload.highHeightFt,
           };
 
           if (rectangleModalState.mode === "edit" && rectangleModalState.entityId) {

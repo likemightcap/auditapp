@@ -2,6 +2,7 @@ import type {
   EditorAction,
   EditorState,
   FloorData,
+  FloorPreset,
   MapEntity,
   Orientation,
   Project,
@@ -9,16 +10,25 @@ import type {
   WallPoint,
   WallSegment,
 } from "../types";
+import {
+  FLOOR_PRESET_LABELS,
+  inferFloorPresetFromName,
+  isAtticPreset,
+  isBasementPreset,
+  sortFloorsByPresetOrder,
+} from "../constants/floors";
 import { MAX_ZOOM, MIN_ZOOM, clamp, normalize } from "../utils/geometry";
 
 function uid(prefix: string): string {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
-function createInitialFloor(name = "1st Floor"): FloorData {
+function createInitialFloor(name = "1ST FLOOR", floorPreset: FloorPreset = "FIRST_FLOOR"): FloorData {
   return {
     id: uid("floor"),
     name,
+    floorPreset,
+    unconditioned: false,
     entities: [],
     wallPoints: [],
     wallSegments: [],
@@ -126,6 +136,62 @@ function cloneRectanglesForDuplicate(sourceFloor: FloorData): MapEntity[] {
       id: uid("ent"),
       metadata: { ...entity.metadata },
     }));
+}
+
+function cloneRectanglesForLevelCopyAsBasic(sourceFloor: FloorData): MapEntity[] {
+  return sourceFloor.entities
+    .filter((entity) => entity.type === "rectangle")
+    .map((entity) => ({
+      ...entity,
+      id: uid("ent"),
+      label: "",
+      metadata: {
+        color: "BLUE",
+        unconditioned: false,
+        ceilingType: "standard",
+        standardHeightFt: 8,
+        lowHeightFt: 8,
+        highHeightFt: 12,
+      },
+    }));
+}
+
+function conditionedRectangleBaselineForFloor(floor: FloorData): RectBounds[] {
+  return floor.entities
+    .filter((entity) => entity.type === "rectangle" && !Boolean(entity.metadata.unconditioned))
+    .map((entity) => rectBoundsFromRectangle(entity));
+}
+
+function floorPresetFor(floor: FloorData): FloorPreset {
+  return floor.floorPreset ?? inferFloorPresetFromName(floor.name);
+}
+
+function resolveFloorUnconditioned(preset: FloorPreset, requested: boolean): boolean {
+  if (isAtticPreset(preset)) {
+    return true;
+  }
+  if (isBasementPreset(preset)) {
+    return requested;
+  }
+  return false;
+}
+
+function normalizeFloorForPreset(floor: FloorData): FloorData {
+  const preset = floorPresetFor(floor);
+  return {
+    ...floor,
+    floorPreset: preset,
+    name: floor.name || FLOOR_PRESET_LABELS[preset],
+    unconditioned: resolveFloorUnconditioned(preset, Boolean(floor.unconditioned)),
+  };
+}
+
+function normalizeAndSortFloors(floors: FloorData[]): FloorData[] {
+  return sortFloorsByPresetOrder(floors.map((floor) => normalizeFloorForPreset(floor)));
+}
+
+function getFirstFloorId(floors: FloorData[]): string {
+  return floors[0]?.id ?? "";
 }
 
 function normalizeEntityForGrid(entity: MapEntity): MapEntity {
@@ -649,11 +715,26 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     case "SET_AVG_CEILING":
       return withHistory(state, { ...state.project, averageCeilingHeightFt: action.value });
     case "ADD_LEVEL": {
-      const nextFloor = createInitialFloor(action.floorName);
-      nextFloor.unconditioned = action.unconditioned;
+      const preset = action.floorPreset;
+      if (state.project.floors.some((floor) => floorPresetFor(floor) === preset)) {
+        return state;
+      }
+
+      const nextFloor = createInitialFloor(action.floorName, preset);
+      nextFloor.unconditioned = resolveFloorUnconditioned(preset, action.unconditioned);
+
+      if (action.copyFromFloorId) {
+        const source = state.project.floors.find((floor) => floor.id === action.copyFromFloorId);
+        if (source) {
+          nextFloor.entities = cloneRectanglesForLevelCopyAsBasic(source);
+          nextFloor.duplicateConditionedBaseline = conditionedRectangleBaselineForFloor(source);
+        }
+      }
+
+      const nextFloors = normalizeAndSortFloors([...state.project.floors, nextFloor]);
       return withHistory(state, {
         ...state.project,
-        floors: [...state.project.floors, nextFloor],
+        floors: nextFloors,
         activeFloorId: nextFloor.id,
       });
     }
@@ -663,10 +744,10 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
         return state;
       }
 
-      const nextFloors = state.project.floors.filter((floor) => floor.id !== action.floorId);
+      const nextFloors = normalizeAndSortFloors(state.project.floors.filter((floor) => floor.id !== action.floorId));
       const nextActiveFloorId =
         state.project.activeFloorId === action.floorId
-          ? nextFloors[0]?.id ?? ""
+          ? getFirstFloorId(nextFloors)
           : state.project.activeFloorId;
 
       return {
@@ -693,30 +774,49 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       };
     }
     case "UPDATE_LEVEL":
+      if (
+        state.project.floors.some(
+          (floor) => floor.id !== action.floorId && floorPresetFor(floor) === action.floorPreset,
+        )
+      ) {
+        return state;
+      }
+
+      {
+        const nextFloors = normalizeAndSortFloors(
+          state.project.floors.map((floor) =>
+            floor.id === action.floorId
+              ? {
+                  ...floor,
+                  name: action.name,
+                  floorPreset: action.floorPreset,
+                  unconditioned: resolveFloorUnconditioned(action.floorPreset, action.unconditioned),
+                }
+              : floor,
+          ),
+        );
+
       return withHistory(state, {
         ...state.project,
-        floors: state.project.floors.map((floor) =>
-          floor.id === action.floorId
-            ? { ...floor, name: action.name, unconditioned: action.unconditioned }
-            : floor,
-        ),
+        floors: nextFloors,
       });
+      }
     case "DUPLICATE_LEVEL_RECTANGLES": {
       const source = state.project.floors.find((floor) => floor.id === action.floorId);
       if (!source) {
         return state;
       }
 
-      const nextFloor = createInitialFloor(action.floorName);
+      const nextFloor = createInitialFloor(action.floorName, floorPresetFor(source));
       nextFloor.unconditioned = action.unconditioned;
-      nextFloor.duplicateConditionedBaseline = source.entities
-        .filter((entity) => entity.type === "rectangle" && !Boolean(entity.metadata.unconditioned))
-        .map((entity) => rectBoundsFromRectangle(entity));
+      nextFloor.duplicateConditionedBaseline = conditionedRectangleBaselineForFloor(source);
       nextFloor.entities = cloneRectanglesForDuplicate(source);
+
+      const nextFloors = normalizeAndSortFloors([...state.project.floors, nextFloor]);
 
       return withHistory(state, {
         ...state.project,
-        floors: [...state.project.floors, nextFloor],
+        floors: nextFloors,
         activeFloorId: nextFloor.id,
       });
     }
@@ -910,14 +1010,24 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       };
     }
     case "LOAD_PROJECT":
+      {
+        const normalizedFloors = normalizeAndSortFloors(action.project.floors ?? []);
+        const activeExists = normalizedFloors.some((floor) => floor.id === action.project.activeFloorId);
+        const nextProject: Project = {
+          ...action.project,
+          floors: normalizedFloors,
+          activeFloorId: activeExists ? action.project.activeFloorId : getFirstFloorId(normalizedFloors),
+        };
+
       return {
         ...state,
-        project: action.project,
+        project: nextProject,
         historyPast: [],
         historyFuture: [],
         selection: { kind: "none" },
         wallDraftPointId: null,
       };
+      }
     case "RESET_PROJECT":
       return createInitialEditorState();
     default:

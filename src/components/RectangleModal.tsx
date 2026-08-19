@@ -18,6 +18,7 @@ export interface RectangleModalInitialValues extends RectangleModalSubmit {}
 
 interface RectangleModalProps {
   isOpen: boolean;
+  isAtticFloor?: boolean;
   initialValues: RectangleModalInitialValues;
   onCancel: () => void;
   onSubmit: (payload: RectangleModalSubmit) => void;
@@ -98,7 +99,7 @@ function StepperField({
   );
 }
 
-export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: RectangleModalProps) {
+export function RectangleModal({ isOpen, isAtticFloor = false, initialValues, onCancel, onSubmit }: RectangleModalProps) {
   const [label, setLabel] = useState("");
   const [color, setColor] = useState("BLUE");
   const [widthFt, setWidthFt] = useState(12);
@@ -125,7 +126,15 @@ export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: Re
     setLowHeightFt(clampToPositiveInt(initialValues.lowHeightFt));
     setHighHeightFt(clampToPositiveInt(initialValues.highHeightFt));
     setColorManuallySet(false);
-  }, [initialValues, isOpen]);
+
+    if (isAtticFloor) {
+      setUnconditioned(false);
+      setCeilingType("standard");
+      setStandardHeightFt(8);
+      setLowHeightFt(8);
+      setHighHeightFt(12);
+    }
+  }, [initialValues, isAtticFloor, isOpen]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -141,6 +150,9 @@ export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: Re
     if (widthFt < 1 || heightFt < 1) {
       return false;
     }
+    if (isAtticFloor) {
+      return true;
+    }
     if (ceilingType === "none") {
       return true;
     }
@@ -151,7 +163,7 @@ export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: Re
       return lowHeightFt >= 1 && highHeightFt >= 1 && highHeightFt >= lowHeightFt;
     }
     return lowHeightFt >= 1 && highHeightFt >= 1;
-  }, [ceilingType, heightFt, highHeightFt, lowHeightFt, standardHeightFt, widthFt]);
+  }, [ceilingType, heightFt, highHeightFt, isAtticFloor, lowHeightFt, standardHeightFt, widthFt]);
 
   const sideLabels = useMemo(() => {
     if (ceilingType === "sloped-horizontal") {
@@ -218,62 +230,66 @@ export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: Re
           <StepperField value={heightFt} onChange={setHeightFt} />
         </div>
 
-        <div className="modal-row">
-          <label>UNCONDITIONED:</label>
-          <label className="modal-checkbox rect-unconditioned-checkbox" htmlFor="rectUnconditioned">
-            <input
-              id="rectUnconditioned"
-              type="checkbox"
-              checked={unconditioned}
-              onChange={(event) => {
-                const nextUnconditioned = event.target.checked;
-                setUnconditioned(nextUnconditioned);
-                if (!colorManuallySet) {
-                  setColor(defaultRectangleColorForOptions(nextUnconditioned, ceilingType));
-                }
-              }}
-            />
-            <span>Exclude from area and volume</span>
-          </label>
-        </div>
-
-        <div className="modal-row ceiling-row">
-          <label>CEILING TYPE:</label>
-          <select
-            value={ceilingType}
-            onChange={(event) => {
-              const nextCeilingType = event.target.value as CeilingType;
-              setCeilingType(nextCeilingType);
-              if (!colorManuallySet) {
-                setColor(defaultRectangleColorForOptions(unconditioned, nextCeilingType));
-              }
-            }}
-          >
-            <option value="none">NO CEILING</option>
-            <option value="standard">STANDARD</option>
-            <option value="cathedral">CATHEDRAL (VERTICAL)</option>
-            <option value="cathedral-horizontal">CATHEDRAL (HORIZONTAL)</option>
-            <option value="sloped">SLOPED (VERTICAL)</option>
-            <option value="sloped-horizontal">SLOPED (HORIZONTAL)</option>
-          </select>
-        </div>
-
-        {ceilingType === "none" ? null : ceilingType === "standard" ? (
-          <div className="modal-row">
-            <label>CEILING HEIGHT:</label>
-            <StepperField value={standardHeightFt} onChange={setStandardHeightFt} />
-          </div>
-        ) : (
-          <div className="dual-heights">
-            <div className="compact-input-row">
-              <label>{sideLabels.first}</label>
-              <StepperField value={highHeightFt} onChange={setHighHeightFt} />
+        {!isAtticFloor && (
+          <>
+            <div className="modal-row">
+              <label>UNCONDITIONED:</label>
+              <label className="modal-checkbox rect-unconditioned-checkbox" htmlFor="rectUnconditioned">
+                <input
+                  id="rectUnconditioned"
+                  type="checkbox"
+                  checked={unconditioned}
+                  onChange={(event) => {
+                    const nextUnconditioned = event.target.checked;
+                    setUnconditioned(nextUnconditioned);
+                    if (!colorManuallySet) {
+                      setColor(defaultRectangleColorForOptions(nextUnconditioned, ceilingType));
+                    }
+                  }}
+                />
+                <span>Exclude from area and volume</span>
+              </label>
             </div>
-            <div className="compact-input-row">
-              <label>{sideLabels.second}</label>
-              <StepperField value={lowHeightFt} onChange={setLowHeightFt} />
+
+            <div className="modal-row ceiling-row">
+              <label>CEILING TYPE:</label>
+              <select
+                value={ceilingType}
+                onChange={(event) => {
+                  const nextCeilingType = event.target.value as CeilingType;
+                  setCeilingType(nextCeilingType);
+                  if (!colorManuallySet) {
+                    setColor(defaultRectangleColorForOptions(unconditioned, nextCeilingType));
+                  }
+                }}
+              >
+                <option value="none">NO CEILING</option>
+                <option value="standard">STANDARD</option>
+                <option value="cathedral">CATHEDRAL (VERTICAL)</option>
+                <option value="cathedral-horizontal">CATHEDRAL (HORIZONTAL)</option>
+                <option value="sloped">SLOPED (VERTICAL)</option>
+                <option value="sloped-horizontal">SLOPED (HORIZONTAL)</option>
+              </select>
             </div>
-          </div>
+
+            {ceilingType === "none" ? null : ceilingType === "standard" ? (
+              <div className="modal-row">
+                <label>CEILING HEIGHT:</label>
+                <StepperField value={standardHeightFt} onChange={setStandardHeightFt} />
+              </div>
+            ) : (
+              <div className="dual-heights">
+                <div className="compact-input-row">
+                  <label>{sideLabels.first}</label>
+                  <StepperField value={highHeightFt} onChange={setHighHeightFt} />
+                </div>
+                <div className="compact-input-row">
+                  <label>{sideLabels.second}</label>
+                  <StepperField value={lowHeightFt} onChange={setLowHeightFt} />
+                </div>
+              </div>
+            )}
+          </>
         )}
 
         <div className="modal-actions">
@@ -287,11 +303,11 @@ export function RectangleModal({ isOpen, initialValues, onCancel, onSubmit }: Re
                 color,
                 widthFt,
                 heightFt,
-                unconditioned,
-                ceilingType,
-                standardHeightFt,
-                highHeightFt,
-                lowHeightFt,
+                unconditioned: isAtticFloor ? false : unconditioned,
+                ceilingType: isAtticFloor ? "standard" : ceilingType,
+                standardHeightFt: isAtticFloor ? 8 : standardHeightFt,
+                highHeightFt: isAtticFloor ? 12 : highHeightFt,
+                lowHeightFt: isAtticFloor ? 8 : lowHeightFt,
               })
             }
           >

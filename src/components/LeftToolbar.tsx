@@ -1014,6 +1014,10 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
             <span>Total Volume</span>
             <strong>{metrics.volumeFt3.toFixed(0)}</strong>
           </div>
+          <div className="stats-row">
+            <span>Total Attic ft²</span>
+            <strong>{metrics.totalAtticAreaFt2.toFixed(0)}</strong>
+          </div>
         </section>
       )}
 

@@ -1,4 +1,5 @@
 import type { FloorData, MapEntity, Project, WallPoint } from "../types";
+import { inferFloorPresetFromName, isAtticPreset, sortFloorsByPresetOrder } from "../constants/floors";
 
 interface FloorMetrics {
   wallLoopAreaFt2: number;
@@ -14,6 +15,7 @@ export interface ProjectMetrics {
   conditionedAreaFt2: number;
   averageCeilingHeightFt: number;
   volumeFt3: number;
+  totalAtticAreaFt2: number;
   activeFloor: FloorMetrics;
 }
 
@@ -88,6 +90,26 @@ function rectBounds(entity: MapEntity) {
     x2: Math.max(x1 + 1, x2),
     y2: Math.max(y1 + 1, y2),
   };
+}
+
+function conditionedRectangleCells(floor: FloorData): Set<string> {
+  const cells = new Set<string>();
+  const rectangles = floor.entities.filter((entity) => entity.type === "rectangle");
+
+  for (const rect of rectangles) {
+    if (Boolean(rect.metadata.unconditioned)) {
+      continue;
+    }
+
+    const { x1, y1, x2, y2 } = rectBounds(rect);
+    for (let x = x1; x < x2; x += 1) {
+      for (let y = y1; y < y2; y += 1) {
+        cells.add(`${x},${y}`);
+      }
+    }
+  }
+
+  return cells;
 }
 
 function ceilingAverageHeight(entity: MapEntity): number {
@@ -176,6 +198,36 @@ export function calculateProjectMetrics(project: Project, previewEntity: MapEnti
 
   let conditionedAreaFt2 = 0;
   let conditionedVolumeFt3 = 0;
+  let totalAtticAreaFt2 = 0;
+
+  const orderedFloors = sortFloorsByPresetOrder(project.floors);
+  for (let index = 0; index < orderedFloors.length; index += 1) {
+    const floor = orderedFloors[index];
+    const preset = floor.floorPreset ?? inferFloorPresetFromName(floor.name);
+    if (!isAtticPreset(preset)) {
+      continue;
+    }
+
+    const atticCells = conditionedRectangleCells(floor);
+    if (atticCells.size === 0) {
+      continue;
+    }
+
+    const supportingFloor = index > 0 ? orderedFloors[index - 1] : null;
+    if (!supportingFloor) {
+      continue;
+    }
+    const supportingCells = conditionedRectangleCells(supportingFloor);
+    if (supportingCells.size === 0) {
+      continue;
+    }
+
+    for (const cell of atticCells) {
+      if (supportingCells.has(cell)) {
+        totalAtticAreaFt2 += 1;
+      }
+    }
+  }
 
   for (const floor of project.floors) {
     if (Boolean(floor.unconditioned)) {
@@ -205,6 +257,7 @@ export function calculateProjectMetrics(project: Project, previewEntity: MapEnti
     conditionedAreaFt2,
     averageCeilingHeightFt,
     volumeFt3,
+    totalAtticAreaFt2,
     activeFloor: active,
   };
 }

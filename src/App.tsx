@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { ConfirmModal } from "./components/ConfirmModal";
-import { DuplicateNameModal } from "./components/DuplicateNameModal";
-import type { DuplicateNameModalSubmit } from "./components/DuplicateNameModal";
 import { FloorTabs } from "./components/FloorTabs";
 import { LeftToolbar } from "./components/LeftToolbar";
 import { LevelModal } from "./components/LevelModal";
 import type { LevelModalSubmit } from "./components/LevelModal";
 import { Workspace } from "./components/Workspace";
+import {
+  FLOOR_PRESET_ORDER,
+  floorPresetRank,
+  inferFloorPresetFromName,
+} from "./constants/floors";
 import { EditorProvider, useEditor } from "./state/EditorContext";
+import type { FloorData, FloorPreset } from "./types";
 
 const SIDEBAR_BASE_WIDTH = 280;
 const SIDEBAR_COLLAPSED_BASE_WIDTH = 84;
@@ -15,6 +19,7 @@ const SIDEBAR_MIN_SCALE = 0.42;
 interface LevelModalState {
   mode: "create" | "edit";
   floorId?: string;
+  initialPreset: FloorPreset;
   initialName: string;
   initialUnconditioned: boolean;
 }
@@ -22,12 +27,6 @@ interface LevelModalState {
 interface DeleteLevelConfirmState {
   floorId: string;
   floorName: string;
-}
-
-interface DuplicateLevelState {
-  sourceFloorId: string;
-  unconditioned: boolean;
-  initialName: string;
 }
 
 function selectedEntityType(state: ReturnType<typeof useEditor>["state"]): string | null {
@@ -69,7 +68,6 @@ function EditorShell() {
   const activeFloor = state.project.floors.find((item) => item.id === state.project.activeFloorId) ?? state.project.floors[0] ?? null;
   const [levelModalState, setLevelModalState] = useState<LevelModalState | null>(null);
   const [deleteLevelConfirmState, setDeleteLevelConfirmState] = useState<DeleteLevelConfirmState | null>(null);
-  const [duplicateLevelState, setDuplicateLevelState] = useState<DuplicateLevelState | null>(null);
   const shellRef = useRef<HTMLDivElement | null>(null);
   const sidebarFrameRef = useRef<HTMLDivElement | null>(null);
   const sidebarScaleTargetRef = useRef<HTMLDivElement | null>(null);
@@ -246,11 +244,41 @@ function EditorShell() {
     dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
   };
 
+  const getFloorPreset = (floor: FloorData): FloorPreset => floor.floorPreset ?? inferFloorPresetFromName(floor.name);
+
+  const getDefaultCreatePreset = (): FloorPreset => {
+    if (state.project.floors.length === 0) {
+      return "FIRST_FLOOR";
+    }
+
+    const usedPresets = new Set(state.project.floors.map((floor) => getFloorPreset(floor)));
+    const activeFloorCandidate =
+      state.project.floors.find((floor) => floor.id === state.project.activeFloorId) ?? state.project.floors[0];
+    const activePreset = activeFloorCandidate ? getFloorPreset(activeFloorCandidate) : "FIRST_FLOOR";
+    const activeRank = floorPresetRank(activePreset);
+
+    for (let index = activeRank + 1; index < FLOOR_PRESET_ORDER.length; index += 1) {
+      const preset = FLOOR_PRESET_ORDER[index];
+      if (!usedPresets.has(preset)) {
+        return preset;
+      }
+    }
+
+    for (const preset of FLOOR_PRESET_ORDER) {
+      if (!usedPresets.has(preset)) {
+        return preset;
+      }
+    }
+
+    return "FIRST_FLOOR";
+  };
+
   const openCreateLevelModal = () => {
-    const count = state.project.floors.length + 1;
+    const defaultPreset = getDefaultCreatePreset();
     setLevelModalState({
       mode: "create",
-      initialName: `Level ${count}`,
+      initialPreset: defaultPreset,
+      initialName: "",
       initialUnconditioned: false,
     });
   };
@@ -263,7 +291,8 @@ function EditorShell() {
     setLevelModalState({
       mode: "edit",
       floorId,
-      initialName: floor.name,
+      initialPreset: getFloorPreset(floor),
+      initialName: "",
       initialUnconditioned: Boolean(floor.unconditioned),
     });
   };
@@ -277,7 +306,9 @@ function EditorShell() {
       dispatch({
         type: "ADD_LEVEL",
         floorName: payload.name,
+        floorPreset: payload.floorPreset,
         unconditioned: payload.unconditioned,
+        copyFromFloorId: payload.copyFromFloorId,
       });
       setLevelModalState(null);
       return;
@@ -291,35 +322,9 @@ function EditorShell() {
       type: "UPDATE_LEVEL",
       floorId: levelModalState.floorId,
       name: payload.name,
+      floorPreset: payload.floorPreset,
       unconditioned: payload.unconditioned,
     });
-    setLevelModalState(null);
-  };
-
-  const handleLevelDuplicate = (payload: LevelModalSubmit) => {
-    if (!levelModalState || levelModalState.mode !== "edit" || !levelModalState.floorId) {
-      return;
-    }
-
-    setDuplicateLevelState({
-      sourceFloorId: levelModalState.floorId,
-      unconditioned: payload.unconditioned,
-      initialName: payload.name ? `${payload.name} Copy` : "Level Copy",
-    });
-  };
-
-  const confirmDuplicateLevel = (payload: DuplicateNameModalSubmit) => {
-    if (!duplicateLevelState) {
-      return;
-    }
-
-    dispatch({
-      type: "DUPLICATE_LEVEL_RECTANGLES",
-      floorId: duplicateLevelState.sourceFloorId,
-      floorName: payload.name,
-      unconditioned: payload.unconditioned,
-    });
-    setDuplicateLevelState(null);
     setLevelModalState(null);
   };
 
@@ -328,9 +333,14 @@ function EditorShell() {
       return;
     }
 
+    const floor = state.project.floors.find((item) => item.id === levelModalState.floorId);
+    if (!floor) {
+      return;
+    }
+
     setDeleteLevelConfirmState({
       floorId: levelModalState.floorId,
-      floorName: levelModalState.initialName,
+      floorName: floor.name,
     });
   };
 
@@ -403,34 +413,29 @@ function EditorShell() {
 
       <LevelModal
         isOpen={levelModalState !== null}
-        title={levelModalState?.mode === "edit" ? "EDIT LEVEL" : "CREATE LEVEL"}
+        title={levelModalState?.mode === "edit" ? "EDIT FLOOR" : "CREATE FLOOR"}
+        mode={levelModalState?.mode ?? "create"}
+        editingFloorId={levelModalState?.floorId}
+        existingFloors={state.project.floors}
+        initialPreset={levelModalState?.initialPreset ?? "FIRST_FLOOR"}
         initialName={levelModalState?.initialName ?? ""}
         initialUnconditioned={levelModalState?.initialUnconditioned ?? false}
-        showDuplicate={levelModalState?.mode === "edit"}
         showDelete={levelModalState?.mode === "edit"}
         onCancel={() => setLevelModalState(null)}
         onSubmit={handleLevelSubmit}
-        onDuplicate={handleLevelDuplicate}
         onDelete={requestDeleteLevel}
       />
 
       <ConfirmModal
         isOpen={deleteLevelConfirmState !== null}
-        title="DELETE LEVEL"
-        message={`Delete \"${deleteLevelConfirmState?.floorName ?? "this level"}\"?`}
+        title="DELETE FLOOR"
+        message={`Delete \"${deleteLevelConfirmState?.floorName ?? "this floor"}\"?`}
         confirmText="YES, DELETE"
         cancelText="NO"
         onCancel={() => setDeleteLevelConfirmState(null)}
         onConfirm={confirmDeleteLevel}
       />
 
-      <DuplicateNameModal
-        isOpen={duplicateLevelState !== null}
-        initialName={duplicateLevelState?.initialName ?? ""}
-        initialUnconditioned={duplicateLevelState?.unconditioned ?? false}
-        onCancel={() => setDuplicateLevelState(null)}
-        onSubmit={confirmDuplicateLevel}
-      />
     </div>
   );
 }

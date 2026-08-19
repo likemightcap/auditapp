@@ -1,5 +1,12 @@
 export type Orientation = "N" | "NE" | "E" | "SE" | "S" | "SW" | "W" | "NW";
 
+export type FloorPreset =
+  | "BASEMENT_CRAWLSPACE"
+  | "FIRST_FLOOR"
+  | "SECOND_FLOOR"
+  | "THIRD_FLOOR"
+  | "ATTIC";
+
 export type ToolId =
   | "select"
   | "wall"
@@ -57,6 +64,7 @@ export interface MapEntity {
 export interface FloorData {
   id: string;
   name: string;
+  floorPreset?: FloorPreset;
   unconditioned?: boolean;
   duplicateConditionedBaseline?: Array<{
     x: number;
@@ -118,10 +126,16 @@ export type EditorAction =
   | { type: "SET_DEFAULT_WINDOW_SIZE"; widthFt: number; heightFt: number }
   | { type: "SET_DEFAULT_DOOR_TYPE"; doorType: "single" | "double" | "sliding" }
   | { type: "SET_AVG_CEILING"; value: number }
-  | { type: "ADD_LEVEL"; floorName: string; unconditioned: boolean }
+  | {
+      type: "ADD_LEVEL";
+      floorName: string;
+      floorPreset: FloorPreset;
+      unconditioned: boolean;
+      copyFromFloorId?: string;
+    }
   | { type: "DELETE_LEVEL"; floorId: string }
   | { type: "SET_ACTIVE_FLOOR"; floorId: string }
-  | { type: "UPDATE_LEVEL"; floorId: string; name: string; unconditioned: boolean }
+  | { type: "UPDATE_LEVEL"; floorId: string; name: string; floorPreset: FloorPreset; unconditioned: boolean }
   | { type: "DUPLICATE_LEVEL_RECTANGLES"; floorId: string; floorName: string; unconditioned: boolean }
   | { type: "UPSERT_ENTITY"; entity: MapEntity }
   | {
