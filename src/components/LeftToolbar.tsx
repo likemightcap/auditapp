@@ -21,7 +21,7 @@ import type { CameraState, FloorData, MapEntity, ToolId } from "../types";
 
 type DoorToolType = "single" | "double" | "sliding";
 
-function getDoorToolTypeFromProjectMetadata(metadata: Record<string, string | number | boolean>): DoorToolType {
+function getDoorToolTypeFromProjectMetadata(metadata: Record<string, string | number | boolean | null>): DoorToolType {
   const value = String(metadata.doorDefaultType ?? "single").toLowerCase();
   if (value === "double" || value === "sliding") {
     return value;
@@ -29,14 +29,14 @@ function getDoorToolTypeFromProjectMetadata(metadata: Record<string, string | nu
   return "single";
 }
 
-function getRectangleStickyModeFromProjectMetadata(metadata: Record<string, string | number | boolean>): boolean {
-  return Boolean(metadata.rectangleStickyMode);
-}
-
 const DOOR_TOOL_OPTIONS: Array<{ id: DoorToolType; label: string }> = [
   { id: "single", label: "DOOR" },
   { id: "double", label: "DOUBLE" },
   { id: "sliding", label: "SLIDING" },
+];
+
+const BUMPOUT_TOOL_OPTIONS: Array<{ id: "bumpout"; label: string }> = [
+  { id: "bumpout", label: "BUMP OUT" },
 ];
 
 function clampPositiveInt(value: number, fallback: number): number {
@@ -428,6 +428,20 @@ function ToolIcon({
     return <span className="tool-icon-text-heavy">T</span>;
   }
 
+  if (toolId === "bumpout") {
+    return (
+      <svg className="tool-icon-svg" viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M3 20 L21 20 L21 13 L18 8 L15 6 L9 6 L6 8 L3 13 Z"
+          fill="rgba(0,0,0,0.08)"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
+
   return <span className="icon">{fallback}</span>;
 }
 
@@ -436,7 +450,6 @@ function ToolGroup({
   ids,
   onWindowToolConfigRequest,
   doorType,
-  rectangleStickyMode,
   onDoorTypeChange,
   collapsed,
   onToolPressed,
@@ -445,7 +458,6 @@ function ToolGroup({
   ids: ToolId[];
   onWindowToolConfigRequest?: () => void;
   doorType?: DoorToolType;
-  rectangleStickyMode?: boolean;
   onDoorTypeChange?: (next: DoorToolType) => void;
   collapsed?: boolean;
   onToolPressed?: (toolId: ToolId) => void;
@@ -457,8 +469,13 @@ function ToolGroup({
   const longPressTargetToolRef = useRef<ToolId | null>(null);
   const longPressFiredRef = useRef(false);
   const doorButtonRef = useRef<HTMLButtonElement | null>(null);
+  const doorSelectorRef = useRef<HTMLDivElement | null>(null);
+  const rectangleButtonRef = useRef<HTMLButtonElement | null>(null);
+  const rectangleSelectorRef = useRef<HTMLDivElement | null>(null);
   const [doorSelectorOpen, setDoorSelectorOpen] = useState(false);
+  const [rectangleSelectorOpen, setRectangleSelectorOpen] = useState(false);
   const [doorSelectorAnchor, setDoorSelectorAnchor] = useState({ left: 0, top: 0, width: 0 });
+  const [rectangleSelectorAnchor, setRectangleSelectorAnchor] = useState({ left: 0, top: 0, width: 0 });
 
   const clearToolLongPress = () => {
     if (longPressTimerRef.current) {
@@ -481,9 +498,71 @@ function ToolGroup({
     setDoorSelectorOpen(true);
   };
 
+  const openRectangleSelector = () => {
+    if (!rectangleButtonRef.current) {
+      return;
+    }
+    setRectangleSelectorAnchor({
+      left: rectangleButtonRef.current.offsetLeft,
+      top: rectangleButtonRef.current.offsetTop + rectangleButtonRef.current.offsetHeight + 6,
+      width: rectangleButtonRef.current.offsetWidth,
+    });
+    setRectangleSelectorOpen(true);
+  };
+
   const orderedTools = ids
     .map((id) => TOOL_DEFINITIONS.find((tool) => tool.id === id))
     .filter((tool): tool is NonNullable<typeof tool> => Boolean(tool));
+
+  useEffect(() => {
+    if (!doorSelectorOpen) {
+      return;
+    }
+
+    const handlePointerDownOutside = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) {
+        return;
+      }
+      if (doorButtonRef.current?.contains(target)) {
+        return;
+      }
+      if (doorSelectorRef.current?.contains(target)) {
+        return;
+      }
+      setDoorSelectorOpen(false);
+    };
+
+    window.addEventListener("pointerdown", handlePointerDownOutside);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDownOutside);
+    };
+  }, [doorSelectorOpen]);
+
+  useEffect(() => {
+    if (!rectangleSelectorOpen) {
+      return;
+    }
+
+    const handlePointerDownOutside = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (!target) {
+        return;
+      }
+      if (rectangleButtonRef.current?.contains(target)) {
+        return;
+      }
+      if (rectangleSelectorRef.current?.contains(target)) {
+        return;
+      }
+      setRectangleSelectorOpen(false);
+    };
+
+    window.addEventListener("pointerdown", handlePointerDownOutside);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDownOutside);
+    };
+  }, [rectangleSelectorOpen]);
 
   return (
     <div className="tool-group tool-group-with-overlay">
@@ -492,11 +571,9 @@ function ToolGroup({
         {orderedTools.map((tool) => (
           <button
             key={tool.id}
-            ref={tool.id === "door" ? doorButtonRef : undefined}
+            ref={tool.id === "door" ? doorButtonRef : tool.id === "rectangle" ? rectangleButtonRef : undefined}
             type="button"
-            className={`tool-btn ${state.activeTool === tool.id ? "active" : ""} ${
-              tool.id === "rectangle" && rectangleStickyMode ? "tool-btn-sticky" : ""
-            }`}
+            className={`tool-btn ${state.activeTool === tool.id ? "active" : ""}`}
             draggable={false}
             onClick={() => {
               if (isUtilityToolId(tool.id)) {
@@ -508,6 +585,9 @@ function ToolGroup({
               }
               if (tool.id !== "door") {
                 setDoorSelectorOpen(false);
+              }
+              if (tool.id !== "rectangle") {
+                setRectangleSelectorOpen(false);
               }
               onToolPressed?.(tool.id);
               dispatch({ type: "SET_TOOL", tool: tool.id });
@@ -544,8 +624,8 @@ function ToolGroup({
                   onWindowToolConfigRequest?.();
                 } else if (tool.id === "rectangle") {
                   onToolPressed?.("rectangle");
-                  dispatch({ type: "SET_RECTANGLE_STICKY_MODE", enabled: !rectangleStickyMode });
                   dispatch({ type: "SET_TOOL", tool: "rectangle" });
+                  openRectangleSelector();
                 } else {
                   onToolPressed?.("door");
                   dispatch({ type: "SET_TOOL", tool: "door" });
@@ -603,6 +683,7 @@ function ToolGroup({
 
       {doorSelectorOpen && onDoorTypeChange && doorType && (
         <div
+          ref={doorSelectorRef}
           className={`door-type-selector ${collapsed ? "is-collapsed" : ""}`}
           style={{ left: `${doorSelectorAnchor.left}px`, top: `${doorSelectorAnchor.top}px`, minWidth: `${doorSelectorAnchor.width}px` }}
         >
@@ -619,6 +700,30 @@ function ToolGroup({
               }}
             >
               <ToolIcon toolId="door" fallback="◖" doorType={option.id} />
+              {!collapsed && <span>{option.label}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {rectangleSelectorOpen && (
+        <div
+          ref={rectangleSelectorRef}
+          className={`door-type-selector ${collapsed ? "is-collapsed" : ""}`}
+          style={{ left: `${rectangleSelectorAnchor.left}px`, top: `${rectangleSelectorAnchor.top}px`, minWidth: `${rectangleSelectorAnchor.width}px` }}
+        >
+          {BUMPOUT_TOOL_OPTIONS.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              className="door-type-option"
+              onClick={() => {
+                onToolPressed?.("bumpout");
+                dispatch({ type: "SET_TOOL", tool: "bumpout" });
+                setRectangleSelectorOpen(false);
+              }}
+            >
+              <ToolIcon toolId="bumpout" fallback="7" />
               {!collapsed && <span>{option.label}</span>}
             </button>
           ))}
@@ -674,7 +779,6 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
   const { state, dispatch } = useEditor();
   const metrics = calculateProjectMetrics(state.project, state.previewEntity);
   const defaultDoorType = getDoorToolTypeFromProjectMetadata(state.project.metadata);
-  const rectangleStickyMode = getRectangleStickyModeFromProjectMetadata(state.project.metadata);
   const [windowToolModalOpen, setWindowToolModalOpen] = useState(false);
   const [utilityDrag, setUtilityDrag] = useState<UtilityDragState | null>(null);
   const [utilityLabelModalState, setUtilityLabelModalState] = useState<UtilityLabelModalState | null>(null);
@@ -981,7 +1085,6 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
         title="TOOLS"
         ids={["select", "rectangle", "text"]}
         collapsed={collapsed}
-        rectangleStickyMode={rectangleStickyMode}
         onToolPressed={maybeClearSelectionForTool}
       />
       <ToolGroup
@@ -989,7 +1092,6 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
         ids={["door", "window", "skylight"]}
         collapsed={collapsed}
         doorType={defaultDoorType}
-        rectangleStickyMode={rectangleStickyMode}
         onDoorTypeChange={(next) => dispatch({ type: "SET_DEFAULT_DOOR_TYPE", doorType: next })}
         onWindowToolConfigRequest={() => setWindowToolModalOpen(true)}
         onToolPressed={maybeClearSelectionForTool}

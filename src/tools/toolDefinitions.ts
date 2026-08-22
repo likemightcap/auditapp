@@ -12,6 +12,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = [
   { id: "select", label: "Select", group: "TOOLS", icon: "↖" },
   { id: "text", label: "Text", group: "TOOLS", icon: "T", entityType: "text" },
   { id: "rectangle", label: "Rectangle", group: "TOOLS", icon: "▭", entityType: "rectangle" },
+  { id: "bumpout", label: "Bump Out", group: "TOOLS", icon: "7" },
   { id: "line", label: "Line", group: "TOOLS", icon: "／", entityType: "line" },
   { id: "wall", label: "Wall", group: "TOOLS", icon: "┃" },
 

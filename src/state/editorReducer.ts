@@ -48,7 +48,10 @@ export function createInitialProject(): Project {
       windowDefaultWidthFt: 3,
       windowDefaultHeightFt: 4,
       doorDefaultType: "single",
-      rectangleStickyMode: false,
+      bumpOutFlats: 5,
+      bumpOutLongEdgeFt: 10,
+      toolLockEnabled: false,
+      lockedToolId: null,
     },
   };
 }
@@ -622,11 +625,22 @@ function setOrientation(project: Project, orientation: Orientation): Project {
 }
 
 function applyStickyModeFromCurrent(target: Project, current: Project): Project {
+  const legacyRectangleSticky = Boolean(current.metadata.rectangleStickyMode);
+  const lockedToolId =
+    typeof current.metadata.lockedToolId === "string"
+      ? current.metadata.lockedToolId
+      : legacyRectangleSticky
+        ? "rectangle"
+        : null;
+  const toolLockEnabled =
+    Boolean(current.metadata.toolLockEnabled) ||
+    legacyRectangleSticky;
   return {
     ...target,
     metadata: {
       ...target.metadata,
-      rectangleStickyMode: Boolean(current.metadata.rectangleStickyMode),
+      toolLockEnabled,
+      lockedToolId,
     },
   };
 }
@@ -634,17 +648,22 @@ function applyStickyModeFromCurrent(target: Project, current: Project): Project 
 export function editorReducer(state: EditorState, action: EditorAction): EditorState {
   switch (action.type) {
     case "SET_TOOL": {
-      const shouldClearRectangleSticky =
-        action.tool !== "rectangle" &&
-        Boolean(state.project.metadata.rectangleStickyMode);
+      const metadata = state.project.metadata;
+      const activeToolLockEnabled = Boolean(metadata.toolLockEnabled);
+      const lockedToolId = typeof metadata.lockedToolId === "string" ? metadata.lockedToolId : null;
+      const shouldClearToolLock =
+        activeToolLockEnabled &&
+        lockedToolId !== null &&
+        action.tool !== lockedToolId;
       return {
         ...state,
-        project: shouldClearRectangleSticky
+        project: shouldClearToolLock
           ? {
               ...state.project,
               metadata: {
                 ...state.project.metadata,
-                rectangleStickyMode: false,
+                toolLockEnabled: false,
+                lockedToolId: null,
               },
             }
           : state.project,
@@ -660,7 +679,20 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
           ...state.project,
           metadata: {
             ...state.project.metadata,
-            rectangleStickyMode: action.enabled,
+            toolLockEnabled: action.enabled,
+            lockedToolId: action.enabled ? "rectangle" : null,
+          },
+        },
+      };
+    case "SET_TOOL_LOCK":
+      return {
+        ...state,
+        project: {
+          ...state.project,
+          metadata: {
+            ...state.project.metadata,
+            toolLockEnabled: action.enabled,
+            lockedToolId: action.enabled ? action.toolId : null,
           },
         },
       };

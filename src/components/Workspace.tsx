@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent, ReactElement, WheelEvent as ReactWheelEvent } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactElement, WheelEvent as ReactWheelEvent } from "react";
 import { RectangleModal } from "./RectangleModal";
 import type { RectangleModalInitialValues, RectangleModalSubmit } from "./RectangleModal";
 import { TextModal } from "./TextModal";
@@ -12,15 +12,23 @@ import { SlidingGlassDoorModal } from "./SlidingGlassDoorModal";
 import type { SlidingGlassDoorModalSubmit } from "./SlidingGlassDoorModal";
 import { UtilityLabelModal } from "./UtilityLabelModal";
 import type { UtilityLabelSubmit } from "./UtilityLabelModal";
+import { BumpOutModal } from "./BumpOutModal";
+import type { BumpOutModalSubmit } from "./BumpOutModal";
 import resizeIcon from "../../assets/svgs/resize-icon.svg";
 import moveIcon from "../../assets/svgs/move-icon.svg";
 import editIcon from "../../assets/svgs/edit-icon.svg";
+import lockIcon from "../../assets/svgs/lock-icon.svg";
+import doorToolIcon from "../../assets/building-icons/door.png";
+import doubleDoorToolIcon from "../../assets/building-icons/double-door.png";
+import slidingGlassToolIcon from "../../assets/building-icons/sliding-glass.png";
+import windowToolIcon from "../../assets/building-icons/window.png";
+import skylightToolIcon from "../../assets/building-icons/skylight.png";
 import { useEditor } from "../state/EditorContext";
 import { createEntityFromTool, createWallPoint, createWallSegment } from "../state/editorReducer";
 import { getToolDefinition } from "../tools/toolDefinitions";
-import { getUtilityIconByEntityType, isUtilityEntityType } from "../assets/utilityIcons";
+import { getUtilityIconByEntityType, isUtilityEntityType, isUtilityToolId } from "../assets/utilityIcons";
 import { inferFloorPresetFromName, isAtticPreset, sortFloorsByPresetOrder } from "../constants/floors";
-import type { MapEntity, Orientation, Point, WallPoint, WallSegment } from "../types";
+import type { MapEntity, Orientation, Point, ToolId, WallPoint, WallSegment } from "../types";
 import {
   clamp,
   constrainOrthogonal,
@@ -111,8 +119,648 @@ const RECT_EDGE_SNAP_THRESHOLD = 3;
 const OPENING_PLACEMENT_SNAP_THRESHOLD = 3;
 const OPENING_PREVIEW_SNAP_THRESHOLD = 3;
 const OPENING_PLACEMENT_PREVIEW_ID = "__opening-placement-preview__";
+const BUMPOUT_ASPECT_RATIO = 0.62;
+const BUMPOUT_EDGE_SNAP_THRESHOLD = 2.8;
+
+type BumpOutFlats = 3 | 4 | 5 | 6;
+
+function isBumpOutRectangle(entity: MapEntity): boolean {
+  return entity.type === "rectangle" && entity.metadata.shapeType === "bumpout";
+}
+
+function getBumpOutFlats(entity: MapEntity): BumpOutFlats {
+  const value = Number(entity.metadata.bumpOutFlats ?? 5);
+  if (value === 3 || value === 4 || value === 5 || value === 6) {
+    return value;
+  }
+  if (value === 7 || value === 9) {
+    return 6;
+  }
+  return 5;
+}
+
+function bumpOutPolygonPoints(
+  width: number,
+  height: number,
+  flats: BumpOutFlats,
+  options?: { cornerInset?: number; rise?: number; crownWidth?: number },
+): Point[] {
+  const w = Math.max(1, width);
+  const d = Math.max(1, height);
+  const rise = clampValue(
+    Math.round(options?.rise ?? d),
+    1,
+    d,
+  );
+
+  // 3 and 5 use an explicit top segment parallel to the connected edge.
+  if (flats === 3 || flats === 5) {
+    const sideSegments = (flats - 1) / 2;
+    const defaultCrown = flats === 3 ? Math.round(w * 0.56) : Math.round(w * 0.34);
+    const crownFromInset = Number.isFinite(options?.cornerInset) ? w - Math.round((options?.cornerInset ?? 0) * 2) : NaN;
+    const crownRaw = Number.isFinite(crownFromInset) ? crownFromInset : Math.round(options?.crownWidth ?? defaultCrown);
+    const maxCrown = Math.max(1, w - sideSegments * 2);
+    const crownWidth = clampValue(crownRaw, 1, maxCrown);
+    const sideSpan = (w - crownWidth) / 2;
+    const topY = d - rise;
+    const sideProfiles =
+      flats === 3
+        ? [{ x: 1, y: 1 }]
+        : [
+            { x: 0.06, y: 0.58 },
+            { x: 1, y: 1 },
+          ];
+
+    const rightSide: Point[] = [];
+    for (let index = 1; index <= sideSegments; index += 1) {
+      const profile = sideProfiles[index - 1] ?? { x: index / sideSegments, y: index / sideSegments };
+      rightSide.push({
+        x: w - sideSpan * profile.x,
+        y: d - rise * profile.y,
+      });
+    }
+
+    const leftCrown: Point = { x: (w - crownWidth) / 2, y: topY };
+    const mirroredLeft = rightSide
+      .slice(0, -1)
+      .reverse()
+      .map((point) => ({ x: w - point.x, y: point.y }));
+
+    return [
+      { x: 0, y: d },
+      { x: w, y: d },
+      ...rightSide,
+      leftCrown,
+      ...mirroredLeft,
+    ];
+  }
+
+  // 4 and 6 keep a symmetric crown apex and never flatten into an open shape.
+  if (flats === 4 || flats === 6) {
+    const sideSegments = flats / 2;
+    const sideProfiles =
+      flats === 4
+        ? [
+            { x: 0.22, y: 0.66 },
+            { x: 1, y: 1 },
+          ]
+        : [
+            { x: 0.08, y: 0.5 },
+            { x: 0.35, y: 0.84 },
+            { x: 1, y: 1 },
+          ];
+    const rightSide: Point[] = [];
+    for (let index = 1; index <= sideSegments; index += 1) {
+      const profile = sideProfiles[index - 1] ?? { x: index / sideSegments, y: index / sideSegments };
+      rightSide.push({
+        x: w - (w / 2) * profile.x,
+        y: d - rise * profile.y,
+      });
+    }
+
+    const mirroredLeft = rightSide
+      .slice(0, -1)
+      .reverse()
+      .map((point) => ({ x: w - point.x, y: point.y }));
+
+    return [
+      { x: 0, y: d },
+      { x: w, y: d },
+      ...rightSide,
+      ...mirroredLeft,
+    ];
+  }
+
+  const radius = (w * w) / (8 * d) + d / 2;
+  const centerX = w / 2;
+  const centerY = radius;
+  const leftAngle = Math.atan2(d - centerY, -w / 2);
+  const rightAngle = Math.atan2(d - centerY, w / 2) + Math.PI * 2;
+  const step = (rightAngle - leftAngle) / flats;
+
+  const arcInterior: Point[] = [];
+  for (let index = 1; index < flats; index += 1) {
+    const angle = leftAngle + step * index;
+    arcInterior.push({
+      x: centerX + radius * Math.cos(angle),
+      y: centerY + radius * Math.sin(angle),
+    });
+  }
+
+  return [
+    { x: 0, y: d },
+    { x: w, y: d },
+    ...arcInterior.reverse(),
+  ];
+}
+
+function getBumpOutRenderPoints(entity: MapEntity): Point[] {
+  const flats = getBumpOutFlats(entity);
+  const hostEdge = (entity.metadata.hostEdge as RectEdge | undefined) ?? "top";
+  const cornerInset = Number(entity.metadata.bumpOutCornerInset);
+  const rise = Number(entity.metadata.bumpOutRise);
+  const crownWidth = Number(entity.metadata.bumpOutCrownWidth);
+  const styleOptions = {
+    cornerInset: Number.isFinite(cornerInset) ? cornerInset : undefined,
+    rise: Number.isFinite(rise) ? rise : undefined,
+    crownWidth: Number.isFinite(crownWidth) ? crownWidth : undefined,
+  };
+
+  if (hostEdge === "left" || hostEdge === "right") {
+    const template = bumpOutPolygonPoints(Math.max(1, entity.height), Math.max(1, entity.width), flats, styleOptions);
+    return template.map((point) =>
+      hostEdge === "left"
+        ? { x: point.y, y: point.x }
+        : { x: Math.max(1, entity.width) - point.y, y: point.x },
+    );
+  }
+
+  const points = bumpOutPolygonPoints(Math.max(1, entity.width), Math.max(1, entity.height), flats, styleOptions);
+  if (hostEdge === "bottom") {
+    return points.map((point) => ({ x: point.x, y: Math.max(1, entity.height) - point.y }));
+  }
+  return points;
+}
+
+function bumpOutPath(points: Point[]): string {
+  return points
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`)
+    .join(" ");
+}
+
+function nearestPointOnSegment(point: Point, start: Point, end: Point): { point: Point; t: number; distance: number } {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq <= Number.EPSILON) {
+    return { point: { ...start }, t: 0, distance: Math.hypot(point.x - start.x, point.y - start.y) };
+  }
+
+  const rawT = ((point.x - start.x) * dx + (point.y - start.y) * dy) / lenSq;
+  const t = clampValue(rawT, 0, 1);
+  const projected = {
+    x: start.x + dx * t,
+    y: start.y + dy * t,
+  };
+  return {
+    point: projected,
+    t,
+    distance: Math.hypot(point.x - projected.x, point.y - projected.y),
+  };
+}
+
+function classifySegmentEdge(start: Point, end: Point): RectEdge {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return dy >= 0 ? "bottom" : "top";
+  }
+  return dx >= 0 ? "right" : "left";
+}
+
+function getBumpOutWorldPoints(entity: MapEntity): Point[] {
+  return getBumpOutRenderPoints(entity).map((point) => ({ x: entity.x + point.x, y: entity.y + point.y }));
+}
+
+function polygonBounds(points: Point[]): RectBounds {
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  for (const point of points) {
+    minX = Math.min(minX, point.x);
+    minY = Math.min(minY, point.y);
+    maxX = Math.max(maxX, point.x);
+    maxY = Math.max(maxY, point.y);
+  }
+  return {
+    x: minX,
+    y: minY,
+    width: Math.max(0, maxX - minX),
+    height: Math.max(0, maxY - minY),
+  };
+}
+
+function cross2d(a: Point, b: Point, c: Point): number {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+function pointOnSegmentInclusive(point: Point, start: Point, end: Point, epsilon = 1e-6): boolean {
+  const cross = Math.abs(cross2d(start, end, point));
+  if (cross > epsilon) {
+    return false;
+  }
+  const minX = Math.min(start.x, end.x) - epsilon;
+  const maxX = Math.max(start.x, end.x) + epsilon;
+  const minY = Math.min(start.y, end.y) - epsilon;
+  const maxY = Math.max(start.y, end.y) + epsilon;
+  return point.x >= minX && point.x <= maxX && point.y >= minY && point.y <= maxY;
+}
+
+function segmentsIntersectInclusive(a1: Point, a2: Point, b1: Point, b2: Point, epsilon = 1e-6): boolean {
+  const d1 = cross2d(a1, a2, b1);
+  const d2 = cross2d(a1, a2, b2);
+  const d3 = cross2d(b1, b2, a1);
+  const d4 = cross2d(b1, b2, a2);
+
+  const properIntersect =
+    ((d1 > epsilon && d2 < -epsilon) || (d1 < -epsilon && d2 > epsilon)) &&
+    ((d3 > epsilon && d4 < -epsilon) || (d3 < -epsilon && d4 > epsilon));
+  if (properIntersect) {
+    return true;
+  }
+
+  return (
+    pointOnSegmentInclusive(b1, a1, a2, epsilon) ||
+    pointOnSegmentInclusive(b2, a1, a2, epsilon) ||
+    pointOnSegmentInclusive(a1, b1, b2, epsilon) ||
+    pointOnSegmentInclusive(a2, b1, b2, epsilon)
+  );
+}
+
+function pointInPolygonInclusive(point: Point, polygon: Point[], epsilon = 1e-6): boolean {
+  for (let index = 0; index < polygon.length; index += 1) {
+    const start = polygon[index];
+    const end = polygon[(index + 1) % polygon.length];
+    if (pointOnSegmentInclusive(point, start, end, epsilon)) {
+      return true;
+    }
+  }
+
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+    const xi = polygon[i].x;
+    const yi = polygon[i].y;
+    const xj = polygon[j].x;
+    const yj = polygon[j].y;
+    const intersects =
+      yi > point.y !== yj > point.y &&
+      point.x < ((xj - xi) * (point.y - yi)) / (yj - yi + Number.EPSILON) + xi;
+    if (intersects) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function bumpOutPolygonsIntersect(a: Point[], b: Point[]): boolean {
+  if (a.length < 3 || b.length < 3) {
+    return false;
+  }
+
+  const boundsA = polygonBounds(a);
+  const boundsB = polygonBounds(b);
+  const overlapsBounds =
+    boundsA.x <= boundsB.x + boundsB.width &&
+    boundsA.x + boundsA.width >= boundsB.x &&
+    boundsA.y <= boundsB.y + boundsB.height &&
+    boundsA.y + boundsA.height >= boundsB.y;
+  if (!overlapsBounds) {
+    return false;
+  }
+
+  for (let i = 0; i < a.length; i += 1) {
+    const a1 = a[i];
+    const a2 = a[(i + 1) % a.length];
+    for (let j = 0; j < b.length; j += 1) {
+      const b1 = b[j];
+      const b2 = b[(j + 1) % b.length];
+      if (segmentsIntersectInclusive(a1, a2, b1, b2)) {
+        return true;
+      }
+    }
+  }
+
+  return pointInPolygonInclusive(a[0], b) || pointInPolygonInclusive(b[0], a);
+}
+
+function doesBumpOutIntersectAny(
+  candidate: MapEntity,
+  rectangles: MapEntity[],
+  ignoreId?: string,
+): boolean {
+  if (!isBumpOutRectangle(candidate)) {
+    return false;
+  }
+
+  const candidatePoints = getBumpOutWorldPoints(candidate);
+  for (const other of rectangles) {
+    if (!isBumpOutRectangle(other) || other.id === ignoreId || other.id === candidate.id) {
+      continue;
+    }
+    if (bumpOutPolygonsIntersect(candidatePoints, getBumpOutWorldPoints(other))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function getHostBumpOutSegment(
+  entity: MapEntity,
+  rectangles: MapEntity[],
+): { start: Point; end: Point; index: number; length: number } | null {
+  const hostRectId = entity.metadata.hostRectId as string | undefined;
+  const segmentIndexRaw = Number(entity.metadata.bumpOutSegmentIndex);
+  if (!hostRectId || !Number.isFinite(segmentIndexRaw)) {
+    return null;
+  }
+
+  const host = rectangles.find((item) => item.id === hostRectId && isBumpOutRectangle(item));
+  if (!host) {
+    return null;
+  }
+
+  const points = getBumpOutWorldPoints(host);
+  if (points.length < 2) {
+    return null;
+  }
+
+  const segmentIndex = Math.max(0, Math.min(points.length - 1, Math.round(segmentIndexRaw)));
+  const start = points[segmentIndex];
+  const end = points[(segmentIndex + 1) % points.length];
+  const length = Math.hypot(end.x - start.x, end.y - start.y);
+  return { start, end, index: segmentIndex, length };
+}
+
+function nearestWindowHostEdge(point: Point, rectangles: MapEntity[]): EdgeSnap | null {
+  let best: EdgeSnap | null = null;
+
+  for (const rectEntity of rectangles) {
+    if (!isBumpOutRectangle(rectEntity)) {
+      const rect = rectBoundsFromEntity(rectEntity);
+      const x1 = rect.x;
+      const y1 = rect.y;
+      const x2 = rect.x + rect.width;
+      const y2 = rect.y + rect.height;
+      const candidates: EdgeSnap[] = [
+        {
+          rectId: rectEntity.id,
+          edge: "top",
+          x: clampValue(point.x, x1, x2),
+          y: y1,
+          distance: Math.hypot(point.x - clampValue(point.x, x1, x2), point.y - y1),
+        },
+        {
+          rectId: rectEntity.id,
+          edge: "bottom",
+          x: clampValue(point.x, x1, x2),
+          y: y2,
+          distance: Math.hypot(point.x - clampValue(point.x, x1, x2), point.y - y2),
+        },
+        {
+          rectId: rectEntity.id,
+          edge: "left",
+          x: x1,
+          y: clampValue(point.y, y1, y2),
+          distance: Math.hypot(point.x - x1, point.y - clampValue(point.y, y1, y2)),
+        },
+        {
+          rectId: rectEntity.id,
+          edge: "right",
+          x: x2,
+          y: clampValue(point.y, y1, y2),
+          distance: Math.hypot(point.x - x2, point.y - clampValue(point.y, y1, y2)),
+        },
+      ];
+
+      for (const candidate of candidates) {
+        if (!best || candidate.distance < best.distance) {
+          best = candidate;
+        }
+      }
+      continue;
+    }
+
+    const worldPoints = getBumpOutWorldPoints(rectEntity);
+    for (let index = 0; index < worldPoints.length; index += 1) {
+      if (index === 0) {
+        continue;
+      }
+      const start = worldPoints[index];
+      const end = worldPoints[(index + 1) % worldPoints.length];
+      const projected = nearestPointOnSegment(point, start, end);
+      const angleDeg = (Math.atan2(end.y - start.y, end.x - start.x) * 180) / Math.PI;
+      const candidate: EdgeSnap = {
+        rectId: rectEntity.id,
+        edge: classifySegmentEdge(start, end),
+        x: projected.point.x,
+        y: projected.point.y,
+        distance: projected.distance,
+        segmentIndex: index,
+        segmentAngleDeg: angleDeg,
+      };
+      if (!best || candidate.distance < best.distance) {
+        best = candidate;
+      }
+    }
+  }
+
+  return best;
+}
+
+function getConnectedLongEdgeHandleForHostEdge(hostEdge: RectEdge): ResizeHandle {
+  if (hostEdge === "top") {
+    return "s";
+  }
+  if (hostEdge === "bottom") {
+    return "n";
+  }
+  if (hostEdge === "left") {
+    return "e";
+  }
+  return "w";
+}
+
+function isBumpOutResizeHandleAllowed(entity: MapEntity, handle: ResizeHandle): boolean {
+  if (!isBumpOutRectangle(entity)) {
+    return true;
+  }
+  const hostEdge = (entity.metadata.hostEdge as RectEdge | undefined) ?? "top";
+  const connectedHandle = getConnectedLongEdgeHandleForHostEdge(hostEdge);
+  return !handle.includes(connectedHandle);
+}
+
+function clampBumpOutRectToHost(
+  hostRect: RectBounds,
+  hostEdge: RectEdge,
+  rect: RectBounds,
+): RectBounds {
+  if (hostEdge === "top") {
+    const width = Math.min(rect.width, hostRect.width);
+    const x = clampValue(rect.x, hostRect.x, hostRect.x + hostRect.width - width);
+    return { x, y: hostRect.y - rect.height, width, height: rect.height };
+  }
+  if (hostEdge === "bottom") {
+    const width = Math.min(rect.width, hostRect.width);
+    const x = clampValue(rect.x, hostRect.x, hostRect.x + hostRect.width - width);
+    return { x, y: hostRect.y + hostRect.height, width, height: rect.height };
+  }
+  if (hostEdge === "left") {
+    const height = Math.min(rect.height, hostRect.height);
+    const y = clampValue(rect.y, hostRect.y, hostRect.y + hostRect.height - height);
+    return { x: hostRect.x - rect.width, y, width: rect.width, height };
+  }
+  const height = Math.min(rect.height, hostRect.height);
+  const y = clampValue(rect.y, hostRect.y, hostRect.y + hostRect.height - height);
+  return { x: hostRect.x + hostRect.width, y, width: rect.width, height };
+}
+
+function getBumpOutStyleSizeLimits(flats: BumpOutFlats): { minLong: number; minDepth: number } {
+  if (flats === 3) {
+    return { minLong: 3, minDepth: 2 };
+  }
+  if (flats === 4) {
+    return { minLong: 4, minDepth: 2 };
+  }
+  if (flats === 5) {
+    return { minLong: 5, minDepth: 2 };
+  }
+  return { minLong: 6, minDepth: 3 };
+}
+
+function createBumpOutFromEdge(
+  snap: EdgeSnap,
+  hostRect: RectBounds,
+  flats: BumpOutFlats,
+  longEdgeFt: number,
+): MapEntity {
+  const width = Math.max(3, Math.round(longEdgeFt));
+  const height = Math.max(2, Math.round(width * BUMPOUT_ASPECT_RATIO));
+  let x = Math.round(snap.x - width / 2);
+  let y = Math.round(snap.y - height / 2);
+  if (snap.edge === "top") {
+    y = hostRect.y - height;
+  } else if (snap.edge === "bottom") {
+    y = hostRect.y + hostRect.height;
+  } else if (snap.edge === "left") {
+    x = hostRect.x - height;
+  } else {
+    x = hostRect.x + hostRect.width;
+  }
+
+  const tentativeRect: RectBounds = {
+    x,
+    y,
+    width: snap.edge === "left" || snap.edge === "right" ? height : width,
+    height: snap.edge === "left" || snap.edge === "right" ? width : height,
+  };
+  const clamped = clampBumpOutRectToHost(hostRect, snap.edge, tentativeRect);
+
+  const entity = createEntityFromTool("rectangle", clamped.x, clamped.y);
+  entity.width = clamped.width;
+  entity.height = clamped.height;
+  const maxInset = Math.max(1, Math.floor(entity.width / 2) - 1);
+  const cornerInset = clampValue(Math.round(entity.width * 0.22), 1, maxInset);
+  const crownWidthDefault = flats === 3 ? Math.round(entity.width * 0.56) : flats === 5 ? Math.round(entity.width * 0.34) : undefined;
+  entity.metadata = {
+    ...entity.metadata,
+    shapeType: "bumpout",
+    bumpOutFlats: flats,
+    hostRectId: snap.rectId,
+    hostEdge: snap.edge,
+    bumpOutCornerInset: cornerInset,
+    bumpOutRise: entity.height,
+    bumpOutCrownWidth: crownWidthDefault,
+  };
+  return entity;
+}
 
 type DoorKind = "single" | "double" | "sliding";
+
+type DoorToolType = "single" | "double" | "sliding";
+
+function getDoorToolTypeFromMetadata(metadata: Record<string, string | number | boolean | null>): DoorToolType {
+  const value = String(metadata.doorDefaultType ?? "single").toLowerCase();
+  if (value === "double" || value === "sliding") {
+    return value;
+  }
+  return "single";
+}
+
+function isLockableTool(toolId: ToolId): boolean {
+  return toolId !== "select" && !isUtilityToolId(toolId);
+}
+
+function renderWorkspaceToolIcon(toolId: ToolId, doorType: DoorToolType): ReactElement {
+  if (toolId === "select") {
+    return (
+      <svg className="workspace-tool-lock-main-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M4 2 L4 20 L8.6 15.9 L11.6 22 L14.6 20.5 L11.5 14.6 L18 14.3 Z"
+          fill="currentColor"
+          stroke="currentColor"
+          strokeWidth="0.9"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
+
+  if (toolId === "rectangle") {
+    return (
+      <svg className="workspace-tool-lock-main-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="3.2" y="6" width="17.6" height="12" fill="rgba(0,0,0,0.08)" stroke="currentColor" strokeWidth="2.4" />
+      </svg>
+    );
+  }
+
+  if (toolId === "bumpout") {
+    return (
+      <svg className="workspace-tool-lock-main-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M3 20 L21 20 L21 14 L19 10 L16 8 L8 8 L5 10 L3 14 Z"
+          fill="rgba(0,0,0,0.08)"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
+
+  if (toolId === "door") {
+    const iconSource =
+      doorType === "double"
+        ? doubleDoorToolIcon
+        : doorType === "sliding"
+          ? slidingGlassToolIcon
+          : doorToolIcon;
+    return (
+      <span
+        className="tool-icon-image tool-icon-building tool-icon-door tool-icon-building-mask workspace-tool-lock-main-icon"
+        style={{ "--building-icon": `url(${iconSource})` } as CSSProperties}
+        aria-hidden="true"
+      />
+    );
+  }
+
+  if (toolId === "window") {
+    return (
+      <span
+        className="tool-icon-image tool-icon-building tool-icon-window tool-icon-building-mask workspace-tool-lock-main-icon"
+        style={{ "--building-icon": `url(${windowToolIcon})` } as CSSProperties}
+        aria-hidden="true"
+      />
+    );
+  }
+
+  if (toolId === "skylight") {
+    return (
+      <span
+        className="tool-icon-image tool-icon-building tool-icon-skylight tool-icon-building-mask workspace-tool-lock-main-icon"
+        style={{ "--building-icon": `url(${skylightToolIcon})` } as CSSProperties}
+        aria-hidden="true"
+      />
+    );
+  }
+
+  if (toolId === "text") {
+    return <span className="workspace-tool-lock-text-icon">T</span>;
+  }
+
+  const toolDef = getToolDefinition(toolId);
+  return <span className="workspace-tool-lock-fallback-icon">{toolDef?.icon ?? "*"}</span>;
+}
 
 function getDoorKind(entity: MapEntity): DoorKind {
   if (entity.type !== "door") {
@@ -382,6 +1030,8 @@ interface EdgeSnap {
   x: number;
   y: number;
   distance: number;
+  segmentIndex?: number;
+  segmentAngleDeg?: number;
 }
 
 type GuideSegment =
@@ -473,6 +1123,11 @@ interface UtilityLabelModalState {
   entityId: string;
   initialText: string;
   initialColor: string;
+}
+
+interface BumpOutModalState {
+  initialFlats: BumpOutFlats;
+  initialLongEdgeFt: number;
 }
 
 type ResizeHintZone =
@@ -1920,6 +2575,23 @@ function snapWindowCenterAxis(axis: number, width: number): number {
 }
 
 function lockWindowCenterToHostEdge(world: Point, entity: MapEntity, rectangles: MapEntity[]): Point {
+  const bumpOutSegment = getHostBumpOutSegment(entity, rectangles);
+  if (bumpOutSegment && bumpOutSegment.length > Number.EPSILON) {
+    const dx = bumpOutSegment.end.x - bumpOutSegment.start.x;
+    const dy = bumpOutSegment.end.y - bumpOutSegment.start.y;
+    const rawT =
+      ((world.x - bumpOutSegment.start.x) * dx +
+        (world.y - bumpOutSegment.start.y) * dy) /
+      (bumpOutSegment.length * bumpOutSegment.length);
+    const half = Math.max(0.5, Math.round(Math.abs(entity.width)) / 2);
+    const tPad = half / bumpOutSegment.length;
+    const t = tPad <= 0.5 ? clampValue(rawT, tPad, 1 - tPad) : 0.5;
+    return {
+      x: bumpOutSegment.start.x + dx * t,
+      y: bumpOutSegment.start.y + dy * t,
+    };
+  }
+
   const edge = (entity.metadata.edge as RectEdge | undefined) ?? "top";
   const hostRect = getHostRectForEntity(entity, rectangles);
   if (!hostRect) {
@@ -1952,6 +2624,15 @@ function lockWindowCenterToHostEdge(world: Point, entity: MapEntity, rectangles:
 }
 
 function lockWindowPointToHostEdge(world: Point, entity: MapEntity, rectangles: MapEntity[]): Point {
+  const bumpOutSegment = getHostBumpOutSegment(entity, rectangles);
+  if (bumpOutSegment && bumpOutSegment.length > Number.EPSILON) {
+    const projected = nearestPointOnSegment(world, bumpOutSegment.start, bumpOutSegment.end);
+    return {
+      x: projected.point.x,
+      y: projected.point.y,
+    };
+  }
+
   const edge = (entity.metadata.edge as RectEdge | undefined) ?? "top";
   const hostRect = getHostRectForEntity(entity, rectangles);
   if (!hostRect) {
@@ -2100,6 +2781,59 @@ function resolveOpeningPositionWithoutOverlap(
   rectangles: MapEntity[],
   excludeEntityId?: string,
 ): Point | null {
+  const bumpOutSegment = getHostBumpOutSegment(entity, rectangles);
+  if (bumpOutSegment && bumpOutSegment.length > Number.EPSILON) {
+    const dx = bumpOutSegment.end.x - bumpOutSegment.start.x;
+    const dy = bumpOutSegment.end.y - bumpOutSegment.start.y;
+    const length = bumpOutSegment.length;
+    const halfWidth = Math.abs(entity.width) / 2;
+    const axisMin = halfWidth;
+    const axisMax = length - halfWidth;
+    const desiredAxis =
+      ((desiredPosition.x - bumpOutSegment.start.x) * dx +
+        (desiredPosition.y - bumpOutSegment.start.y) * dy) /
+      length;
+
+    const hostRectId = entity.metadata.hostRectId as string | undefined;
+    const segmentIndex = Number(entity.metadata.bumpOutSegmentIndex);
+    const blockers = entities
+      .filter((candidate) => {
+        if (candidate.id === excludeEntityId) {
+          return false;
+        }
+        if (candidate.type !== "door" && candidate.type !== "window") {
+          return false;
+        }
+        if (candidate.metadata.hostRectId !== hostRectId) {
+          return false;
+        }
+        return Number(candidate.metadata.bumpOutSegmentIndex) === segmentIndex;
+      })
+      .map((candidate) => {
+        const axis =
+          ((candidate.x - bumpOutSegment.start.x) * dx +
+            (candidate.y - bumpOutSegment.start.y) * dy) /
+          length;
+        const half = Math.abs(candidate.width) / 2;
+        return {
+          start: axis - half,
+          end: axis + half,
+        };
+      })
+      .sort((a, b) => a.start - b.start || a.end - b.end);
+
+    const resolvedAxis = resolveAxisWithoutOverlap(desiredAxis, axisMin, axisMax, halfWidth, blockers);
+    if (resolvedAxis === null) {
+      return null;
+    }
+
+    const t = resolvedAxis / length;
+    return {
+      x: bumpOutSegment.start.x + dx * t,
+      y: bumpOutSegment.start.y + dy * t,
+    };
+  }
+
   const edge = entity.metadata.edge as RectEdge | undefined;
   const hostRectId = entity.metadata.hostRectId as string | undefined;
   if (!edge || !hostRectId) {
@@ -2160,6 +2894,114 @@ function applyRectResize(rect: RectBounds, world: Point, handle: ResizeHandle): 
     y: y1,
     width: Math.max(1, x2 - x1),
     height: Math.max(1, y2 - y1),
+  };
+}
+
+function resizeBumpOutWithHostLock(
+  entity: MapEntity,
+  sourceRect: RectBounds,
+  hostRect: RectBounds,
+  hostEdge: RectEdge,
+  handle: ResizeHandle,
+  world: Point,
+): RectBounds {
+  const connectedHandle = getConnectedLongEdgeHandleForHostEdge(hostEdge);
+  if (handle.includes(connectedHandle)) {
+    return sourceRect;
+  }
+  const flats = getBumpOutFlats(entity);
+  const sizeLimits = getBumpOutStyleSizeLimits(flats);
+  const tentative = applyRectResize(sourceRect, world, handle);
+  const horizontal = hostEdge === "top" || hostEdge === "bottom";
+
+  if (horizontal) {
+    const hostMinX = hostRect.x;
+    const hostMaxX = hostRect.x + hostRect.width;
+    const minLong = Math.max(1, Math.min(sizeLimits.minLong, Math.floor(hostMaxX - hostMinX)));
+    const x1 = clampValue(tentative.x, hostMinX, hostMaxX - minLong);
+    const x2 = clampValue(tentative.x + tentative.width, x1 + minLong, hostMaxX);
+    const width = Math.max(minLong, Math.round(x2 - x1));
+    const baseY = hostEdge === "top" ? hostRect.y : hostRect.y + hostRect.height;
+    const depth = hostEdge === "top"
+      ? Math.max(sizeLimits.minDepth, Math.round(baseY - tentative.y))
+      : Math.max(sizeLimits.minDepth, Math.round(tentative.y + tentative.height - baseY));
+    return {
+      x: Math.round(x1),
+      y: hostEdge === "top" ? Math.round(baseY - depth) : Math.round(baseY),
+      width,
+      height: depth,
+    };
+  }
+
+  const hostMinY = hostRect.y;
+  const hostMaxY = hostRect.y + hostRect.height;
+  const minLong = Math.max(1, Math.min(sizeLimits.minLong, Math.floor(hostMaxY - hostMinY)));
+  const y1 = clampValue(tentative.y, hostMinY, hostMaxY - minLong);
+  const y2 = clampValue(tentative.y + tentative.height, y1 + minLong, hostMaxY);
+  const height = Math.max(minLong, Math.round(y2 - y1));
+  const baseX = hostEdge === "left" ? hostRect.x : hostRect.x + hostRect.width;
+  const depth = hostEdge === "left"
+    ? Math.max(sizeLimits.minDepth, Math.round(baseX - tentative.x))
+    : Math.max(sizeLimits.minDepth, Math.round(tentative.x + tentative.width - baseX));
+  return {
+    x: hostEdge === "left" ? Math.round(baseX - depth) : Math.round(baseX),
+    y: Math.round(y1),
+    width: depth,
+    height,
+  };
+}
+
+function updateBumpOutMetadataOnResize(
+  entity: MapEntity,
+  sourceRect: RectBounds,
+  nextRect: RectBounds,
+  handle: ResizeHandle,
+): MapEntity["metadata"] {
+  const flats = getBumpOutFlats(entity);
+  if (flats !== 3 && flats !== 4 && flats !== 5 && flats !== 6) {
+    return entity.metadata;
+  }
+
+  const hostEdge = (entity.metadata.hostEdge as RectEdge | undefined) ?? "top";
+  const horizontal = hostEdge === "top" || hostEdge === "bottom";
+  const sourceLong = horizontal ? sourceRect.width : sourceRect.height;
+  const nextLong = horizontal ? nextRect.width : nextRect.height;
+  const nextDepth = horizontal ? nextRect.height : nextRect.width;
+
+  const rawRise = Number(entity.metadata.bumpOutRise);
+  const rawCrown = Number(entity.metadata.bumpOutCrownWidth);
+  const defaultCrown = flats === 3 ? Math.round(sourceLong * 0.56) : flats === 5 ? Math.round(sourceLong * 0.34) : 0;
+  let crownWidth = Number.isFinite(rawCrown) ? Math.round(rawCrown) : defaultCrown;
+  let rise = Number.isFinite(rawRise) ? Math.round(rawRise) : nextDepth;
+
+  const affectsLongStart = horizontal ? handle.includes("w") : handle.includes("n");
+  const affectsLongEnd = horizontal ? handle.includes("e") : handle.includes("s");
+  const affectsLong = affectsLongStart || affectsLongEnd;
+  const affectsDepth =
+    (horizontal && (hostEdge === "top" ? handle.includes("n") : handle.includes("s"))) ||
+    (!horizontal && (hostEdge === "left" ? handle.includes("w") : handle.includes("e")));
+
+  if (affectsDepth) {
+    rise = nextDepth;
+  }
+
+  if (affectsLong && (flats === 3 || flats === 5)) {
+    const deltaLong = nextLong - sourceLong;
+    crownWidth += deltaLong;
+  }
+
+  const sideSegments = flats === 3 || flats === 5 ? (flats - 1) / 2 : 0;
+  const maxCrown = Math.max(1, nextLong - sideSegments * 2);
+  crownWidth = clampValue(crownWidth, 1, maxCrown);
+  const maxInset = Math.max(1, Math.floor(nextLong / 2) - 1);
+  const inset = clampValue(Math.round((nextLong - crownWidth) / 2), 1, maxInset);
+  rise = clampValue(rise, 1, nextDepth);
+
+  return {
+    ...entity.metadata,
+    bumpOutCornerInset: inset,
+    bumpOutRise: rise,
+    bumpOutCrownWidth: flats === 3 || flats === 5 ? crownWidth : undefined,
   };
 }
 
@@ -2438,10 +3280,32 @@ export function Workspace() {
   const { state, dispatch } = useEditor();
   const floor = getFloor(state);
   const isActiveFloorAttic = isAtticPreset(floor.floorPreset ?? inferFloorPresetFromName(floor.name));
-  const rectangleStickyMode = Boolean(state.project.metadata.rectangleStickyMode);
+  const lockedToolId = typeof state.project.metadata.lockedToolId === "string" ? (state.project.metadata.lockedToolId as ToolId) : null;
+  const toolLockEnabled = Boolean(state.project.metadata.toolLockEnabled) && lockedToolId !== null;
+  const activeToolIsLockable = isLockableTool(state.activeTool);
+  const activeToolIsLocked = toolLockEnabled && lockedToolId === state.activeTool;
+  const defaultDoorToolType = getDoorToolTypeFromMetadata(state.project.metadata);
+  const bumpOutFlatsFromMetadata = Number(state.project.metadata.bumpOutFlats ?? 5);
+  const defaultBumpOutFlats: BumpOutFlats =
+    bumpOutFlatsFromMetadata === 3 || bumpOutFlatsFromMetadata === 4 || bumpOutFlatsFromMetadata === 5 || bumpOutFlatsFromMetadata === 6
+      ? bumpOutFlatsFromMetadata
+      : bumpOutFlatsFromMetadata === 7 || bumpOutFlatsFromMetadata === 9
+        ? 6
+        : 5;
+  const defaultBumpOutLongEdgeFt = Math.max(3, Math.round(Number(state.project.metadata.bumpOutLongEdgeFt ?? 10)));
+
+  const maybeAutoReturnToSelect = (toolId: ToolId) => {
+    const selectedLockedTool = typeof state.project.metadata.lockedToolId === "string" ? state.project.metadata.lockedToolId : null;
+    const lockIsEnabled = Boolean(state.project.metadata.toolLockEnabled);
+    const keepTool = lockIsEnabled && selectedLockedTool === toolId;
+    if (!keepTool) {
+      dispatch({ type: "SET_TOOL", tool: "select" });
+    }
+  };
 
   const svgRef = useRef<SVGSVGElement | null>(null);
   const initializedViewRef = useRef(false);
+  const previousActiveToolRef = useRef<ToolId>(state.activeTool);
   const [hoverWorld, setHoverWorld] = useState<Point | null>(null);
   const [draftEntity, setDraftEntity] = useState<MapEntity | null>(null);
   const [rectangleModalState, setRectangleModalState] = useState<RectangleModalState | null>(null);
@@ -2450,6 +3314,11 @@ export function Workspace() {
   const [slidingDoorModalState, setSlidingDoorModalState] = useState<SlidingDoorModalState | null>(null);
   const [windowModalState, setWindowModalState] = useState<WindowModalState | null>(null);
   const [utilityLabelModalState, setUtilityLabelModalState] = useState<UtilityLabelModalState | null>(null);
+  const [bumpOutModalState, setBumpOutModalState] = useState<BumpOutModalState | null>(null);
+  const [bumpOutConfig, setBumpOutConfig] = useState<{ flats: BumpOutFlats; longEdgeFt: number }>({
+    flats: defaultBumpOutFlats,
+    longEdgeFt: defaultBumpOutLongEdgeFt,
+  });
   const [cameraPanelCollapsed, setCameraPanelCollapsed] = useState(false);
   const [resizeHint, setResizeHint] = useState<ResizeHintState | null>(null);
   const [hoveredSelectedEntityId, setHoveredSelectedEntityId] = useState<string | null>(null);
@@ -2482,6 +3351,10 @@ export function Workspace() {
     () => floor.entities.filter((entity) => entity.type === "rectangle"),
     [floor.entities],
   );
+  const bumpOutHostRectangles = useMemo(
+    () => rectangleEntities.filter((entity) => !isBumpOutRectangle(entity)),
+    [rectangleEntities],
+  );
   const selectedRectangleEntity = useMemo(() => {
     const selection = state.selection;
     if (selection.kind !== "entity") {
@@ -2493,6 +3366,13 @@ export function Workspace() {
     }
     return candidate;
   }, [floor.entities, state.selection]);
+
+  useEffect(() => {
+    setBumpOutConfig({
+      flats: defaultBumpOutFlats,
+      longEdgeFt: defaultBumpOutLongEdgeFt,
+    });
+  }, [defaultBumpOutFlats, defaultBumpOutLongEdgeFt]);
 
   const selectedOpeningEdge = useMemo(() => {
     const selection = state.selection;
@@ -2708,10 +3588,21 @@ export function Workspace() {
   }, [dispatch]);
 
   useEffect(() => {
-    if (state.activeTool !== "door" && state.activeTool !== "window") {
+    if (state.activeTool !== "door" && state.activeTool !== "window" && state.activeTool !== "bumpout") {
       setOpeningPlacementPreview(null);
     }
   }, [state.activeTool]);
+
+  useEffect(() => {
+    const previous = previousActiveToolRef.current;
+    if (state.activeTool === "bumpout" && previous !== "bumpout") {
+      setBumpOutModalState({
+        initialFlats: bumpOutConfig.flats,
+        initialLongEdgeFt: bumpOutConfig.longEdgeFt,
+      });
+    }
+    previousActiveToolRef.current = state.activeTool;
+  }, [bumpOutConfig.flats, bumpOutConfig.longEdgeFt, state.activeTool]);
 
   const getEventWorld = (event: { clientX: number; clientY: number }): Point => {
     const rect = svgRef.current?.getBoundingClientRect();
@@ -2903,7 +3794,7 @@ export function Workspace() {
     requestedDoorKind?: DoorKind,
     maxSnapDistance = OPENING_PLACEMENT_SNAP_THRESHOLD,
   ): MapEntity | null => {
-    const snap = nearestRectangleEdge(world, rectangleEntities);
+    const snap = type === "window" ? nearestWindowHostEdge(world, rectangleEntities) : nearestRectangleEdge(world, rectangleEntities);
     if (!snap || snap.distance > maxSnapDistance) {
       return null;
     }
@@ -2927,9 +3818,16 @@ export function Workspace() {
       entity.label = "";
     }
 
-    entity.rotation = edgeRotation(snap.edge);
+    const isBumpOutHost = rectangleEntities.some((item) => item.id === snap.rectId && isBumpOutRectangle(item));
+    entity.rotation =
+      type === "window" && isBumpOutHost && typeof snap.segmentAngleDeg === "number"
+        ? snap.segmentAngleDeg
+        : edgeRotation(snap.edge);
     entity.metadata.hostRectId = snap.rectId;
     entity.metadata.edge = snap.edge;
+    if (type === "window" && isBumpOutHost && typeof snap.segmentIndex === "number") {
+      entity.metadata.bumpOutSegmentIndex = snap.segmentIndex;
+    }
     entity.metadata.flipped = false;
     entity.metadata.mirrored = false;
 
@@ -3117,6 +4015,30 @@ export function Workspace() {
       return;
     }
 
+    if (state.activeTool === "bumpout") {
+      const snap = nearestRectangleEdge(world, bumpOutHostRectangles);
+      if (!snap || snap.distance > BUMPOUT_EDGE_SNAP_THRESHOLD) {
+        return;
+      }
+      const hostRect = bumpOutHostRectangles.find((candidate) => candidate.id === snap.rectId);
+      if (!hostRect) {
+        return;
+      }
+      const placed = createBumpOutFromEdge(
+        snap,
+        rectBoundsFromEntity(hostRect),
+        bumpOutConfig.flats,
+        bumpOutConfig.longEdgeFt,
+      );
+      if (doesBumpOutIntersectAny(placed, rectangleEntities)) {
+        return;
+      }
+      dispatch({ type: "UPSERT_ENTITY", entity: placed });
+      dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: placed.id } });
+      maybeAutoReturnToSelect("bumpout");
+      return;
+    }
+
     if (state.activeTool === "select") {
       if (event.pointerType === "touch") {
         beginPan(event, { tapAction: "deselect-empty" });
@@ -3179,6 +4101,7 @@ export function Workspace() {
       }
       dispatch({ type: "UPSERT_ENTITY", entity: placed });
       dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: placed.id } });
+      maybeAutoReturnToSelect(tool.entityType);
       return;
     }
 
@@ -3259,17 +4182,39 @@ export function Workspace() {
     }
     const interaction = interactionRef.current;
 
-    if ((state.activeTool === "door" || state.activeTool === "window") && interaction.type === "none") {
+    if ((state.activeTool === "door" || state.activeTool === "window" || state.activeTool === "bumpout") && interaction.type === "none") {
       const previewCandidate =
         state.activeTool === "door"
           ? tryPlaceDoorOrWindow("door", world, getDefaultDoorKind(), OPENING_PREVIEW_SNAP_THRESHOLD)
-          : tryPlaceDoorOrWindow("window", world, undefined, OPENING_PREVIEW_SNAP_THRESHOLD);
+          : state.activeTool === "window"
+            ? tryPlaceDoorOrWindow("window", world, undefined, OPENING_PREVIEW_SNAP_THRESHOLD)
+            : (() => {
+                const snap = nearestRectangleEdge(world, bumpOutHostRectangles);
+                if (!snap || snap.distance > BUMPOUT_EDGE_SNAP_THRESHOLD) {
+                  return null;
+                }
+                const hostRect = bumpOutHostRectangles.find((candidate) => candidate.id === snap.rectId);
+                if (!hostRect) {
+                  return null;
+                }
+                return createBumpOutFromEdge(
+                  snap,
+                  rectBoundsFromEntity(hostRect),
+                  bumpOutConfig.flats,
+                  bumpOutConfig.longEdgeFt,
+                );
+              })();
 
-      if (!previewCandidate) {
+      const previewCandidateValidated =
+        previewCandidate && isBumpOutRectangle(previewCandidate) && doesBumpOutIntersectAny(previewCandidate, rectangleEntities)
+          ? null
+          : previewCandidate;
+
+      if (!previewCandidateValidated) {
         setOpeningPlacementPreview((current) => (current ? null : current));
       } else {
         const nextPreview: MapEntity = {
-          ...previewCandidate,
+          ...previewCandidateValidated,
           id: OPENING_PLACEMENT_PREVIEW_ID,
         };
         setOpeningPlacementPreview((current) => {
@@ -3283,7 +4228,9 @@ export function Workspace() {
             current.rotation === nextPreview.rotation &&
             current.metadata.hostRectId === nextPreview.metadata.hostRectId &&
             current.metadata.edge === nextPreview.metadata.edge &&
-            current.metadata.doorKind === nextPreview.metadata.doorKind
+            current.metadata.doorKind === nextPreview.metadata.doorKind &&
+            current.metadata.shapeType === nextPreview.metadata.shapeType &&
+            current.metadata.bumpOutFlats === nextPreview.metadata.bumpOutFlats
           ) {
             return current;
           }
@@ -3412,6 +4359,37 @@ export function Workspace() {
       }
 
       if (interaction.entitySnapshot.type === "rectangle") {
+        if (isBumpOutRectangle(interaction.entitySnapshot)) {
+          const hostRect = getHostRectForEntity(interaction.entitySnapshot, rectangleEntities);
+          const hostEdge = (interaction.entitySnapshot.metadata.hostEdge as RectEdge | undefined) ?? "top";
+          if (!hostRect) {
+            return;
+          }
+          const nextRect = clampBumpOutRectToHost(
+            hostRect,
+            hostEdge,
+            {
+              x: Math.round(interaction.entitySnapshot.x + dx),
+              y: Math.round(interaction.entitySnapshot.y + dy),
+              width: Math.max(1, Math.round(interaction.entitySnapshot.width)),
+              height: Math.max(1, Math.round(interaction.entitySnapshot.height)),
+            },
+          );
+          const movedBumpOut: MapEntity = {
+            ...interaction.entitySnapshot,
+            x: nextRect.x,
+            y: nextRect.y,
+          };
+          if (doesBumpOutIntersectAny(movedBumpOut, rectangleEntities, interaction.entitySnapshot.id)) {
+            return;
+          }
+          dispatch({
+            type: "SET_PREVIEW_ENTITY",
+            entity: movedBumpOut,
+          });
+          return;
+        }
+
         const snappedPoint = snapPointToGrid({
           x: interaction.entitySnapshot.x + dx,
           y: interaction.entitySnapshot.y + dy,
@@ -3491,12 +4469,31 @@ export function Workspace() {
               height: interaction.entitySnapshot.height,
             }
           : rectBoundsFromEntity(interaction.entitySnapshot);
-      const resizedRect = applyRectResize(sourceRect, world, interaction.resizeHandle);
+      let resizedRect = applyRectResize(sourceRect, world, interaction.resizeHandle);
+      const isBumpOutResize =
+        interaction.entitySnapshot.type === "rectangle" && isBumpOutRectangle(interaction.entitySnapshot);
+      if (isBumpOutResize) {
+        const hostRect = getHostRectForEntity(interaction.entitySnapshot, rectangleEntities);
+        const hostEdge = (interaction.entitySnapshot.metadata.hostEdge as RectEdge | undefined) ?? "top";
+        if (!hostRect) {
+          return;
+        }
+        resizedRect = resizeBumpOutWithHostLock(
+          interaction.entitySnapshot,
+          sourceRect,
+          hostRect,
+          hostEdge,
+          interaction.resizeHandle,
+          world,
+        );
+      }
       const snapEnabled =
         interaction.entitySnapshot.type === "rectangle" &&
         !isRectangleConnectedToAny(sourceRect, rectangleEntities, interaction.entitySnapshot.id);
       const nextRect =
-        interaction.entitySnapshot.type === "rectangle"
+        isBumpOutResize
+          ? resizedRect
+          : interaction.entitySnapshot.type === "rectangle"
           ? clampRectResizeToAttachedOpenings(
               sourceRect,
               snapEnabled
@@ -3529,6 +4526,17 @@ export function Workspace() {
               width: nextRect.width,
               height: nextRect.height,
             };
+      if (isBumpOutResize) {
+        updated.metadata = updateBumpOutMetadataOnResize(
+          interaction.entitySnapshot,
+          sourceRect,
+          nextRect,
+          interaction.resizeHandle,
+        );
+        if (doesBumpOutIntersectAny(updated, rectangleEntities, interaction.entitySnapshot.id)) {
+          return;
+        }
+      }
       dispatch({ type: "SET_PREVIEW_ENTITY", entity: updated });
       return;
     }
@@ -3537,6 +4545,93 @@ export function Workspace() {
       const snapshot = interaction.entitySnapshot;
       const isWindowLike = snapshot.type === "window" || isSlidingDoor(snapshot);
       if (!isWindowLike) {
+        return;
+      }
+
+      const bumpOutSegment = getHostBumpOutSegment(snapshot, rectangleEntities);
+      if (bumpOutSegment && bumpOutSegment.length > Number.EPSILON) {
+        const dx = bumpOutSegment.end.x - bumpOutSegment.start.x;
+        const dy = bumpOutSegment.end.y - bumpOutSegment.start.y;
+        const length = bumpOutSegment.length;
+        const currentCenterAxis =
+          ((snapshot.x - bumpOutSegment.start.x) * dx +
+            (snapshot.y - bumpOutSegment.start.y) * dy) /
+          length;
+        const currentStart = currentCenterAxis - snapshot.width / 2;
+        const currentEnd = currentCenterAxis + snapshot.width / 2;
+        const handle = interaction.windowHandle ?? "end";
+        const fixedAxis = handle === "start" ? currentEnd : currentStart;
+        const rawDragged =
+          ((world.x - bumpOutSegment.start.x) * dx +
+            (world.y - bumpOutSegment.start.y) * dy) /
+          length;
+        let minDragged = handle === "start" ? 0 : fixedAxis + 1;
+        let maxDragged = handle === "start" ? fixedAxis - 1 : length;
+
+        const hostRectId = snapshot.metadata.hostRectId as string | undefined;
+        const segmentIndex = Number(snapshot.metadata.bumpOutSegmentIndex);
+        const blockers = floor.entities
+          .filter((entity) => {
+            if (entity.id === snapshot.id) {
+              return false;
+            }
+            if (entity.type !== "door" && entity.type !== "window") {
+              return false;
+            }
+            if (entity.metadata.hostRectId !== hostRectId) {
+              return false;
+            }
+            return Number(entity.metadata.bumpOutSegmentIndex) === segmentIndex;
+          })
+          .map((entity) => {
+            const axis =
+              ((entity.x - bumpOutSegment.start.x) * dx +
+                (entity.y - bumpOutSegment.start.y) * dy) /
+              length;
+            const half = Math.abs(entity.width) / 2;
+            return { start: axis - half, end: axis + half };
+          });
+
+        if (handle === "start") {
+          for (const block of blockers) {
+            if (block.end <= fixedAxis && block.start < fixedAxis) {
+              minDragged = Math.max(minDragged, block.end);
+            }
+          }
+        } else {
+          for (const block of blockers) {
+            if (block.start >= fixedAxis && block.end > fixedAxis) {
+              maxDragged = Math.min(maxDragged, block.start);
+            }
+          }
+        }
+
+        const draggedAxis =
+          minDragged <= maxDragged ? clampValue(rawDragged, minDragged, maxDragged) : rawDragged;
+        const nextLength = Math.max(1, Math.round(Math.abs(draggedAxis - fixedAxis)));
+        const centerAxis = (draggedAxis + fixedAxis) / 2;
+        const updated: MapEntity = {
+          ...snapshot,
+          x: bumpOutSegment.start.x + (dx * centerAxis) / length,
+          y: bumpOutSegment.start.y + (dy * centerAxis) / length,
+          width: nextLength,
+        };
+
+        const resolvedPosition = resolveOpeningPositionWithoutOverlap(
+          updated,
+          { x: updated.x, y: updated.y },
+          floor.entities,
+          rectangleEntities,
+          updated.id,
+        );
+        if (!resolvedPosition) {
+          return;
+        }
+
+        updated.x = resolvedPosition.x;
+        updated.y = resolvedPosition.y;
+
+        dispatch({ type: "SET_PREVIEW_ENTITY", entity: updated });
         return;
       }
 
@@ -3933,12 +5028,12 @@ export function Workspace() {
         dispatch({ type: "UPSERT_ENTITY", entity: snapped });
         if (interaction.entitySnapshot.type === "skylight") {
           dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: snapped.id } });
-          dispatch({ type: "SET_TOOL", tool: "select" });
+          maybeAutoReturnToSelect("skylight");
         } else {
           dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
         }
-        if (interaction.entitySnapshot.type === "rectangle" && !rectangleStickyMode) {
-          dispatch({ type: "SET_TOOL", tool: "select" });
+        if (interaction.entitySnapshot.type === "rectangle") {
+          maybeAutoReturnToSelect("rectangle");
         }
         dispatch({ type: "CLEAR_PREVIEW_ENTITY" });
         setDraftEntity(null);
@@ -3953,7 +5048,7 @@ export function Workspace() {
           if (hostRect && isSkylightInsideRectangle(interaction.entitySnapshot, hostRect)) {
             dispatch({ type: "UPSERT_ENTITY", entity: interaction.entitySnapshot });
             dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: interaction.entitySnapshot.id } });
-            dispatch({ type: "SET_TOOL", tool: "select" });
+            maybeAutoReturnToSelect("skylight");
           }
         } else if (interaction.sourceRectangleId) {
           dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: interaction.sourceRectangleId } });
@@ -3975,6 +5070,7 @@ export function Workspace() {
       dispatch({ type: "UPSERT_ENTITY", entity: snapped });
       dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: snapped.id } });
       setDraftEntity(null);
+      maybeAutoReturnToSelect("line");
     }
 
     if (
@@ -3998,7 +5094,8 @@ export function Workspace() {
           interaction.type === "resize-rect" &&
           interaction.resizeHandle &&
           snapshot.type === "rectangle" &&
-          nextEntity.type === "rectangle"
+          nextEntity.type === "rectangle" &&
+          !isBumpOutRectangle(snapshot)
         ) {
           const pushedRectangles = getConnectedPushForRectangleResize(
             snapshot,
@@ -4127,6 +5224,28 @@ export function Workspace() {
       return;
     }
 
+    if (state.activeTool === "bumpout") {
+      const world = getEventWorld(event);
+      const snap = nearestRectangleEdge(world, bumpOutHostRectangles);
+      if (!snap || snap.distance > BUMPOUT_EDGE_SNAP_THRESHOLD) {
+        return;
+      }
+      const hostRect = bumpOutHostRectangles.find((candidate) => candidate.id === snap.rectId);
+      if (!hostRect) {
+        return;
+      }
+      const placed = createBumpOutFromEdge(
+        snap,
+        rectBoundsFromEntity(hostRect),
+        bumpOutConfig.flats,
+        bumpOutConfig.longEdgeFt,
+      );
+      dispatch({ type: "UPSERT_ENTITY", entity: placed });
+      dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: placed.id } });
+      maybeAutoReturnToSelect("bumpout");
+      return;
+    }
+
     if (state.activeTool === "rectangle") {
       const isSelectedRectangle =
         entity.type === "rectangle" &&
@@ -4222,6 +5341,7 @@ export function Workspace() {
       }
       dispatch({ type: "UPSERT_ENTITY", entity: placed });
       dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: placed.id } });
+      maybeAutoReturnToSelect("door");
       return;
     }
 
@@ -4249,6 +5369,7 @@ export function Workspace() {
       }
       dispatch({ type: "UPSERT_ENTITY", entity: placed });
       dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: placed.id } });
+      maybeAutoReturnToSelect("window");
       return;
     }
 
@@ -4481,6 +5602,10 @@ export function Workspace() {
     entity: MapEntity,
     handle: ResizeHandle,
   ) => {
+    if (!isBumpOutResizeHandleAllowed(entity, handle)) {
+      return;
+    }
+
     event.stopPropagation();
     if (event.pointerType === "touch" || event.pointerType === "pen") {
       event.preventDefault();
@@ -4521,6 +5646,37 @@ export function Workspace() {
     }
 
     const startWorld = getEventWorld(event);
+    const bumpOutSegment = getHostBumpOutSegment(entity, rectangleEntities);
+    if (bumpOutSegment && bumpOutSegment.length > Number.EPSILON) {
+      const dx = bumpOutSegment.end.x - bumpOutSegment.start.x;
+      const dy = bumpOutSegment.end.y - bumpOutSegment.start.y;
+      const pointerAxis =
+        ((startWorld.x - bumpOutSegment.start.x) * dx +
+          (startWorld.y - bumpOutSegment.start.y) * dy) /
+        bumpOutSegment.length;
+      const centerAxis =
+        ((entity.x - bumpOutSegment.start.x) * dx +
+          (entity.y - bumpOutSegment.start.y) * dy) /
+        bumpOutSegment.length;
+      const resolvedHandle = pointerAxis < centerAxis ? "start" : pointerAxis > centerAxis ? "end" : handleHint;
+
+      setResizeHintZone(entity.id, `window-${resolvedHandle}` as ResizeHintZone);
+
+      dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: entity.id } });
+      interactionRef.current = {
+        type: "resize-window",
+        pointerId: event.pointerId,
+        pointerType: event.pointerType,
+        startScreen: { x: event.clientX, y: event.clientY },
+        startWorld,
+        targetId: entity.id,
+        entitySnapshot: entity,
+        windowHandle: resolvedHandle,
+      };
+      svgRef.current?.setPointerCapture(event.pointerId);
+      return;
+    }
+
     const edge = (entity.metadata.edge as RectEdge | undefined) ?? "top";
     const horizontalEdge = edge === "top" || edge === "bottom";
     const pointerAxis = horizontalEdge ? startWorld.x : startWorld.y;
@@ -4705,10 +5861,21 @@ export function Workspace() {
 
   return (
     <div className="workspace-wrap">
-      {rectangleStickyMode && (
-        <div className="workspace-sticky-badge" aria-live="polite">
-          STICKY
-        </div>
+      {activeToolIsLockable && (
+        <button
+          type="button"
+          className={`workspace-edit-btn workspace-tool-lock-btn ${activeToolIsLocked ? "is-locked" : ""}`}
+          aria-label={`${activeToolIsLocked ? "Unlock" : "Lock"} ${state.activeTool} tool`}
+          title={activeToolIsLocked ? "Unlock tool" : "Lock tool"}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            dispatch({ type: "SET_TOOL_LOCK", enabled: !activeToolIsLocked, toolId: state.activeTool });
+          }}
+        >
+          {renderWorkspaceToolIcon(state.activeTool, defaultDoorToolType)}
+          {activeToolIsLocked && <img src={lockIcon} alt="" className="workspace-tool-lock-overlay" />}
+        </button>
       )}
       <svg
         ref={svgRef}
@@ -5315,6 +6482,81 @@ export function Workspace() {
                       </text>
                     )}
                   </g>
+                ) : entity.type === "rectangle" && isBumpOutRectangle(entity) ? (
+                  <g>
+                    {(() => {
+                      const width = Math.max(entity.width, 0.4);
+                      const height = Math.max(entity.height, 0.4);
+                      const points = getBumpOutRenderPoints(entity);
+                      const path = bumpOutPath(points);
+                      const hostEdge = (entity.metadata.hostEdge as RectEdge | undefined) ?? "top";
+                      const isUnconditioned = Boolean(entity.metadata.unconditioned);
+                      const strokeColor = selected ? "#ffe59a" : "#ffffff";
+                      const strokeWidth = selected ? 0.28 : 0.22;
+                      const hostCutStrokeWidth = strokeWidth + 0.08;
+                      const strokeMaskId = `bumpout-stroke-mask-${entity.id}`;
+
+                      let hostDashLine: ReactElement;
+                      if (hostEdge === "top") {
+                        hostDashLine = <line x1={0} y1={height} x2={width} y2={height} shapeRendering="crispEdges" />;
+                      } else if (hostEdge === "bottom") {
+                        hostDashLine = <line x1={0} y1={0} x2={width} y2={0} shapeRendering="crispEdges" />;
+                      } else if (hostEdge === "left") {
+                        hostDashLine = <line x1={width} y1={0} x2={width} y2={height} shapeRendering="crispEdges" />;
+                      } else {
+                        hostDashLine = <line x1={0} y1={0} x2={0} y2={height} shapeRendering="crispEdges" />;
+                      }
+
+                      return (
+                        <>
+                          {isUnconditioned && (
+                            <g pointerEvents="none">
+                              <line x1={0} y1={0} x2={width} y2={height} stroke="#c53d3d" strokeWidth={0.24} />
+                              <line x1={width} y1={0} x2={0} y2={height} stroke="#c53d3d" strokeWidth={0.24} />
+                            </g>
+                          )}
+                          <path
+                            d={`${path} Z`}
+                            fill={getRectangleFillColor(entity.metadata.color ?? "Blue")}
+                            stroke="none"
+                            shapeRendering="crispEdges"
+                          />
+                          <mask id={strokeMaskId} maskUnits="userSpaceOnUse" x={-1} y={-1} width={width + 2} height={height + 2}>
+                            <rect x={-1} y={-1} width={width + 2} height={height + 2} fill="#ffffff" />
+                            <g
+                              pointerEvents="none"
+                              stroke="#000000"
+                              strokeWidth={hostCutStrokeWidth}
+                              shapeRendering="crispEdges"
+                            >
+                              {hostDashLine}
+                            </g>
+                          </mask>
+                          <path
+                            d={`${path} Z`}
+                            fill="none"
+                            stroke={strokeColor}
+                            strokeWidth={strokeWidth}
+                            strokeLinejoin="round"
+                            shapeRendering="crispEdges"
+                            mask={`url(#${strokeMaskId})`}
+                          />
+                          <g
+                            pointerEvents="none"
+                            stroke={strokeColor}
+                            strokeWidth={strokeWidth}
+                            strokeDasharray="0.5 0.3"
+                            strokeDashoffset={hostEdge === "top" || hostEdge === "bottom" ? getAlignedDashOffset(entity.x) : getAlignedDashOffset(entity.y)}
+                            strokeLinecap="butt"
+                            opacity={1}
+                            shapeRendering="crispEdges"
+                          >
+                            {hostDashLine}
+                          </g>
+                        </>
+                      );
+                    })()}
+                  </g>
                 ) : entity.type === "rectangle" ? (
                   <g>
                     {(() => {
@@ -5777,6 +7019,8 @@ export function Workspace() {
               : null;
             const showRectZoneHint = (zone: ResizeHintZone) =>
               activeRectZone === zone || activeRectResizeZone === zone;
+            const canUseHandle = (handle: ResizeHandle) =>
+              isBumpOutResizeHandleAllowed(selectedRectangleEntity, handle);
             const anchors: Array<{ x: number; y: number; handle: ResizeHandle; cursor: string }> = [
               { x: x1, y: y1, handle: "nw", cursor: "nwse-resize" },
               { x: x2, y: y1, handle: "ne", cursor: "nesw-resize" },
@@ -5793,10 +7037,10 @@ export function Workspace() {
                   y2={y1}
                   stroke="transparent"
                   strokeWidth={2}
-                  style={{ cursor: "ns-resize" }}
-                  onPointerEnter={() => setResizeHintZone(selectedRectangleEntity.id, "rect-n")}
-                  onPointerLeave={() => clearResizeHintZone(selectedRectangleEntity.id, "rect-n")}
-                  onPointerDown={(event) => startRectangleResize(event, selectedRectangleEntity, "n")}
+                  style={{ cursor: canUseHandle("n") ? "ns-resize" : "default" }}
+                  onPointerEnter={() => canUseHandle("n") && setResizeHintZone(selectedRectangleEntity.id, "rect-n")}
+                  onPointerLeave={() => canUseHandle("n") && clearResizeHintZone(selectedRectangleEntity.id, "rect-n")}
+                  onPointerDown={(event) => canUseHandle("n") && startRectangleResize(event, selectedRectangleEntity, "n")}
                 />
                 <line
                   x1={x1}
@@ -5805,10 +7049,10 @@ export function Workspace() {
                   y2={y2}
                   stroke="transparent"
                   strokeWidth={2}
-                  style={{ cursor: "ns-resize" }}
-                  onPointerEnter={() => setResizeHintZone(selectedRectangleEntity.id, "rect-s")}
-                  onPointerLeave={() => clearResizeHintZone(selectedRectangleEntity.id, "rect-s")}
-                  onPointerDown={(event) => startRectangleResize(event, selectedRectangleEntity, "s")}
+                  style={{ cursor: canUseHandle("s") ? "ns-resize" : "default" }}
+                  onPointerEnter={() => canUseHandle("s") && setResizeHintZone(selectedRectangleEntity.id, "rect-s")}
+                  onPointerLeave={() => canUseHandle("s") && clearResizeHintZone(selectedRectangleEntity.id, "rect-s")}
+                  onPointerDown={(event) => canUseHandle("s") && startRectangleResize(event, selectedRectangleEntity, "s")}
                 />
                 <line
                   x1={x1}
@@ -5817,10 +7061,10 @@ export function Workspace() {
                   y2={y2}
                   stroke="transparent"
                   strokeWidth={2}
-                  style={{ cursor: "ew-resize" }}
-                  onPointerEnter={() => setResizeHintZone(selectedRectangleEntity.id, "rect-w")}
-                  onPointerLeave={() => clearResizeHintZone(selectedRectangleEntity.id, "rect-w")}
-                  onPointerDown={(event) => startRectangleResize(event, selectedRectangleEntity, "w")}
+                  style={{ cursor: canUseHandle("w") ? "ew-resize" : "default" }}
+                  onPointerEnter={() => canUseHandle("w") && setResizeHintZone(selectedRectangleEntity.id, "rect-w")}
+                  onPointerLeave={() => canUseHandle("w") && clearResizeHintZone(selectedRectangleEntity.id, "rect-w")}
+                  onPointerDown={(event) => canUseHandle("w") && startRectangleResize(event, selectedRectangleEntity, "w")}
                 />
                 <line
                   x1={x2}
@@ -5829,10 +7073,10 @@ export function Workspace() {
                   y2={y2}
                   stroke="transparent"
                   strokeWidth={2}
-                  style={{ cursor: "ew-resize" }}
-                  onPointerEnter={() => setResizeHintZone(selectedRectangleEntity.id, "rect-e")}
-                  onPointerLeave={() => clearResizeHintZone(selectedRectangleEntity.id, "rect-e")}
-                  onPointerDown={(event) => startRectangleResize(event, selectedRectangleEntity, "e")}
+                  style={{ cursor: canUseHandle("e") ? "ew-resize" : "default" }}
+                  onPointerEnter={() => canUseHandle("e") && setResizeHintZone(selectedRectangleEntity.id, "rect-e")}
+                  onPointerLeave={() => canUseHandle("e") && clearResizeHintZone(selectedRectangleEntity.id, "rect-e")}
+                  onPointerDown={(event) => canUseHandle("e") && startRectangleResize(event, selectedRectangleEntity, "e")}
                 />
 
                 {showRectZoneHint("rect-n") && (
@@ -5860,10 +7104,16 @@ export function Workspace() {
                       cy={anchor.y}
                       r={1}
                       fill="transparent"
-                      style={{ cursor: anchor.cursor }}
-                      onPointerEnter={() => setResizeHintZone(selectedRectangleEntity.id, `rect-${anchor.handle}` as ResizeHintZone)}
-                      onPointerLeave={() => clearResizeHintZone(selectedRectangleEntity.id, `rect-${anchor.handle}` as ResizeHintZone)}
-                      onPointerDown={(event) => startRectangleResize(event, selectedRectangleEntity, anchor.handle)}
+                      style={{ cursor: canUseHandle(anchor.handle) ? anchor.cursor : "default" }}
+                      onPointerEnter={() =>
+                        canUseHandle(anchor.handle) &&
+                        setResizeHintZone(selectedRectangleEntity.id, `rect-${anchor.handle}` as ResizeHintZone)
+                      }
+                      onPointerLeave={() =>
+                        canUseHandle(anchor.handle) &&
+                        clearResizeHintZone(selectedRectangleEntity.id, `rect-${anchor.handle}` as ResizeHintZone)
+                      }
+                      onPointerDown={(event) => canUseHandle(anchor.handle) && startRectangleResize(event, selectedRectangleEntity, anchor.handle)}
                     />
                     {showRectZoneHint(`rect-${anchor.handle}` as ResizeHintZone) && (
                       <circle
@@ -6224,10 +7474,22 @@ export function Workspace() {
 
           dispatch({ type: "UPSERT_ENTITY", entity: rectangle });
           dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
-          if (!rectangleStickyMode) {
-            dispatch({ type: "SET_TOOL", tool: "select" });
-          }
+          maybeAutoReturnToSelect("rectangle");
           setRectangleModalState(null);
+        }}
+      />
+
+      <BumpOutModal
+        isOpen={bumpOutModalState !== null}
+        initialFlats={bumpOutModalState?.initialFlats ?? bumpOutConfig.flats}
+        initialLongEdgeFt={bumpOutModalState?.initialLongEdgeFt ?? bumpOutConfig.longEdgeFt}
+        onCancel={() => {
+          setBumpOutModalState(null);
+          maybeAutoReturnToSelect("bumpout");
+        }}
+        onSubmit={(payload: BumpOutModalSubmit) => {
+          setBumpOutConfig({ flats: payload.flats, longEdgeFt: Math.max(3, Math.round(payload.longEdgeFt)) });
+          setBumpOutModalState(null);
         }}
       />
 
@@ -6239,7 +7501,7 @@ export function Workspace() {
           const wasCreate = textModalState?.mode === "create";
           setTextModalState(null);
           if (wasCreate) {
-            dispatch({ type: "SET_TOOL", tool: "select" });
+            maybeAutoReturnToSelect("text");
           }
         }}
         onSubmit={(payload: TextModalSubmit) => {
@@ -6281,7 +7543,7 @@ export function Workspace() {
           dispatch({ type: "UPSERT_ENTITY", entity: textEntity });
           dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: textEntity.id } });
           setTextModalState(null);
-          dispatch({ type: "SET_TOOL", tool: "select" });
+          maybeAutoReturnToSelect("text");
         }}
       />
 

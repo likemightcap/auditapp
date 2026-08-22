@@ -12,6 +12,7 @@ export type ToolId =
   | "wall"
   | "text"
   | "rectangle"
+  | "bumpout"
   | "line"
   | "door"
   | "window"
@@ -23,7 +24,7 @@ export type ToolId =
   | "electric"
   | "other";
 
-export type EntityType = Exclude<ToolId, "select" | "wall">;
+export type EntityType = Exclude<ToolId, "select" | "wall" | "bumpout">;
 
 export interface Point {
   x: number;
@@ -85,7 +86,7 @@ export interface Project {
   averageCeilingHeightFt: number;
   floors: FloorData[];
   activeFloorId: string;
-  metadata: Record<string, string | number | boolean>;
+  metadata: Record<string, string | number | boolean | null>;
 }
 
 export interface CameraState {
@@ -114,6 +115,7 @@ export interface EditorState {
 export type EditorAction =
   | { type: "SET_TOOL"; tool: ToolId }
   | { type: "SET_RECTANGLE_STICKY_MODE"; enabled: boolean }
+  | { type: "SET_TOOL_LOCK"; enabled: boolean; toolId: ToolId }
   | { type: "SET_SELECTION"; selection: Selection }
   | { type: "SET_CAMERA"; camera: Partial<CameraState> }
   | { type: "PAN_CAMERA"; dx: number; dy: number }
