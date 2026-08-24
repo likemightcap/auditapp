@@ -507,7 +507,10 @@ function applyUpsertEntityWithRectangleEffects(entities: MapEntity[], normalized
   if (normalized.type === "rectangle") {
     const previousRectangle = entities.find((entity) => entity.id === normalized.id);
     if (previousRectangle?.type === "rectangle") {
-      nextEntities = alignOpeningsToRectangleEdges(nextEntities, normalized);
+      const isBumpOut = normalized.metadata.shapeType === "bumpout";
+      if (!isBumpOut) {
+        nextEntities = alignOpeningsToRectangleEdges(nextEntities, normalized);
+      }
       nextEntities = alignSkylightsInsideRectangle(nextEntities, previousRectangle, normalized);
     }
   }

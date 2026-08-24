@@ -35,7 +35,8 @@ const DOOR_TOOL_OPTIONS: Array<{ id: DoorToolType; label: string }> = [
   { id: "sliding", label: "SLIDING" },
 ];
 
-const BUMPOUT_TOOL_OPTIONS: Array<{ id: "bumpout"; label: string }> = [
+const RECTANGLE_TOOL_OPTIONS: Array<{ id: "rectangle" | "bumpout"; label: string }> = [
+  { id: "rectangle", label: "RECTANGLE" },
   { id: "bumpout", label: "BUMP OUT" },
 ];
 
@@ -250,7 +251,7 @@ async function downloadLevelsPdf(levels: LevelRender[], metrics: ReturnType<type
     const page = pdfDoc.addPage([pageWidth, pageHeight]);
     const left = 0;
     const right = pageWidth;
-    const headerHeight = 92;
+    const headerHeight = 110;
     const divider = 6;
     const bodyTop = pageHeight - headerHeight;
     const bodyHeight = bodyTop;
@@ -283,6 +284,13 @@ async function downloadLevelsPdf(levels: LevelRender[], metrics: ReturnType<type
     page.drawText(`${metrics.volumeFt3.toFixed(0)} :TOTAL VOLUME`, {
       x: detailX,
       y: pageHeight - 70,
+      size: detailSize,
+      font: textFont,
+      color: navy,
+    });
+    page.drawText(`${metrics.totalAtticAreaFt2.toFixed(0)} :TOTAL ATTIC FT²`, {
+      x: detailX,
+      y: pageHeight - 88,
       size: detailSize,
       font: textFont,
       color: navy,
@@ -513,6 +521,7 @@ function ToolGroup({
   const orderedTools = ids
     .map((id) => TOOL_DEFINITIONS.find((tool) => tool.id === id))
     .filter((tool): tool is NonNullable<typeof tool> => Boolean(tool));
+  const activeRectangleTool: "rectangle" | "bumpout" = state.activeTool === "bumpout" ? "bumpout" : "rectangle";
 
   useEffect(() => {
     if (!doorSelectorOpen) {
@@ -623,8 +632,8 @@ function ToolGroup({
                   dispatch({ type: "SET_TOOL", tool: "window" });
                   onWindowToolConfigRequest?.();
                 } else if (tool.id === "rectangle") {
-                  onToolPressed?.("rectangle");
-                  dispatch({ type: "SET_TOOL", tool: "rectangle" });
+                  onToolPressed?.(activeRectangleTool);
+                  dispatch({ type: "SET_TOOL", tool: activeRectangleTool });
                   openRectangleSelector();
                 } else {
                   onToolPressed?.("door");
@@ -712,18 +721,18 @@ function ToolGroup({
           className={`door-type-selector ${collapsed ? "is-collapsed" : ""}`}
           style={{ left: `${rectangleSelectorAnchor.left}px`, top: `${rectangleSelectorAnchor.top}px`, minWidth: `${rectangleSelectorAnchor.width}px` }}
         >
-          {BUMPOUT_TOOL_OPTIONS.map((option) => (
+          {RECTANGLE_TOOL_OPTIONS.map((option) => (
             <button
               key={option.id}
               type="button"
-              className="door-type-option"
+              className={`door-type-option ${activeRectangleTool === option.id ? "active" : ""}`}
               onClick={() => {
-                onToolPressed?.("bumpout");
-                dispatch({ type: "SET_TOOL", tool: "bumpout" });
+                onToolPressed?.(option.id);
+                dispatch({ type: "SET_TOOL", tool: option.id });
                 setRectangleSelectorOpen(false);
               }}
             >
-              <ToolIcon toolId="bumpout" fallback="7" />
+              <ToolIcon toolId={option.id} fallback={option.id === "bumpout" ? "7" : "▭"} />
               {!collapsed && <span>{option.label}</span>}
             </button>
           ))}
@@ -1078,7 +1087,16 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
         title={collapsed ? "Expand" : "Collapse"}
         onClick={onToggleCollapse}
       >
-        {collapsed ? ">" : "<"}
+        <svg width="30" height="30" viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            d={collapsed ? "M9 6.5 L14.5 12 L9 17.5" : "M15 6.5 L9.5 12 L15 17.5"}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="3.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
       </button>
 
       <ToolGroup

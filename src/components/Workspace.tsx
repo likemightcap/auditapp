@@ -482,7 +482,42 @@ function getHostBumpOutSegment(
   return { start, end, index: segmentIndex, length };
 }
 
-function nearestWindowHostEdge(point: Point, rectangles: MapEntity[]): EdgeSnap | null {
+function isAxisWithinConnectedRanges(axis: number, ranges: EdgeRange[]): boolean {
+  return ranges.some((range) => axis >= range.start - EDGE_MATCH_EPSILON && axis <= range.end + EDGE_MATCH_EPSILON);
+}
+
+function isWindowAxisOnConnectedEdge(
+  rectId: string,
+  edge: RectEdge,
+  axis: number,
+  connectedEdgeCarveById?: Map<string, ConnectedEdgeRanges>,
+): boolean {
+  if (!connectedEdgeCarveById) {
+    return false;
+  }
+
+  const ranges = connectedEdgeCarveById.get(rectId);
+  if (!ranges) {
+    return false;
+  }
+
+  if (edge === "top") {
+    return isAxisWithinConnectedRanges(axis, ranges.top);
+  }
+  if (edge === "bottom") {
+    return isAxisWithinConnectedRanges(axis, ranges.bottom);
+  }
+  if (edge === "left") {
+    return isAxisWithinConnectedRanges(axis, ranges.left);
+  }
+  return isAxisWithinConnectedRanges(axis, ranges.right);
+}
+
+function nearestWindowHostEdge(
+  point: Point,
+  rectangles: MapEntity[],
+  connectedEdgeCarveById?: Map<string, ConnectedEdgeRanges>,
+): EdgeSnap | null {
   let best: EdgeSnap | null = null;
 
   for (const rectEntity of rectangles) {
@@ -524,6 +559,10 @@ function nearestWindowHostEdge(point: Point, rectangles: MapEntity[]): EdgeSnap 
       ];
 
       for (const candidate of candidates) {
+        const axis = candidate.edge === "top" || candidate.edge === "bottom" ? candidate.x : candidate.y;
+        if (isWindowAxisOnConnectedEdge(rectEntity.id, candidate.edge, axis, connectedEdgeCarveById)) {
+          continue;
+        }
         if (!best || candidate.distance < best.distance) {
           best = candidate;
         }
@@ -2557,6 +2596,84 @@ function edgeRotation(edge: RectEdge): number {
   return 270;
 }
 
+function getRectEdgeOutwardNormal(edge: RectEdge): Point {
+  if (edge === "top") {
+    return { x: 0, y: -1 };
+  }
+  if (edge === "bottom") {
+    return { x: 0, y: 1 };
+  }
+  if (edge === "left") {
+    return { x: -1, y: 0 };
+  }
+  return { x: 1, y: 0 };
+}
+
+function getBumpOutSegmentOutwardNormal(entity: MapEntity, rectangles: MapEntity[]): Point | null {
+  const hostRectId = entity.metadata.hostRectId as string | undefined;
+  const segmentIndexRaw = Number(entity.metadata.bumpOutSegmentIndex);
+  if (!hostRectId || !Number.isFinite(segmentIndexRaw)) {
+    return null;
+  }
+
+  const host = rectangles.find((item) => item.id === hostRectId && isBumpOutRectangle(item));
+  if (!host) {
+    return null;
+  }
+
+  const points = getBumpOutWorldPoints(host);
+  if (points.length < 2) {
+    return null;
+  }
+
+  const segmentIndex = Math.max(0, Math.min(points.length - 1, Math.round(segmentIndexRaw)));
+  const start = points[segmentIndex];
+  const end = points[(segmentIndex + 1) % points.length];
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const length = Math.hypot(dx, dy);
+  if (length <= Number.EPSILON) {
+    return null;
+  }
+
+  const leftNormal = { x: -dy / length, y: dx / length };
+  const rightNormal = { x: dy / length, y: -dx / length };
+  const midpoint = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+  const centroid = points.reduce(
+    (sum, point) => ({ x: sum.x + point.x, y: sum.y + point.y }),
+    { x: 0, y: 0 },
+  );
+  centroid.x /= points.length;
+  centroid.y /= points.length;
+
+  const toCentroid = { x: centroid.x - midpoint.x, y: centroid.y - midpoint.y };
+  const leftDot = leftNormal.x * toCentroid.x + leftNormal.y * toCentroid.y;
+  const rightDot = rightNormal.x * toCentroid.x + rightNormal.y * toCentroid.y;
+  return leftDot <= rightDot ? leftNormal : rightNormal;
+}
+
+function getWindowExteriorLabelY(entity: MapEntity, rectangles: MapEntity[], selected: boolean): number {
+  if (entity.type !== "window") {
+    return -WINDOW_LABEL_OFFSET;
+  }
+
+  const edge = (entity.metadata.edge as RectEdge | undefined) ?? "top";
+  const outward = getBumpOutSegmentOutwardNormal(entity, rectangles) ?? getRectEdgeOutwardNormal(edge);
+  const rotationRad = (entity.rotation * Math.PI) / 180;
+  const localNegYWorld = {
+    x: Math.sin(rotationRad),
+    y: -Math.cos(rotationRad),
+  };
+  const negYFacesOutward =
+    localNegYWorld.x * outward.x + localNegYWorld.y * outward.y >= 0;
+
+  const distance =
+    WINDOW_LABEL_OFFSET +
+    (selected ? OPENING_LABEL_UNDER_SELECTED_PADDING + WINDOW_BOTTOM_LABEL_EXTRA_PADDING : 0);
+
+  return negYFacesOutward ? -distance : distance;
+}
+
 function getHostRectForEntity(entity: MapEntity, rectangles: MapEntity[]): RectBounds | null {
   const hostRectId = entity.metadata.hostRectId as string | undefined;
   if (!hostRectId) {
@@ -2678,6 +2795,37 @@ function lockSkylightCenterToHostRect(world: Point, entity: MapEntity, rectangle
   };
 }
 
+function syncWindowToBumpOutSegment(windowEntity: MapEntity, rectangles: MapEntity[]): MapEntity | null {
+  if (windowEntity.type !== "window") {
+    return windowEntity;
+  }
+
+  const segment = getHostBumpOutSegment(windowEntity, rectangles);
+  if (!segment || segment.length <= Number.EPSILON) {
+    return windowEntity;
+  }
+
+  const width = Math.max(1, Math.round(Math.abs(windowEntity.width)));
+  if (segment.length < width) {
+    return null;
+  }
+
+  const locked = lockWindowCenterToHostEdge(
+    { x: windowEntity.x, y: windowEntity.y },
+    { ...windowEntity, width },
+    rectangles,
+  );
+  const rotation = (Math.atan2(segment.end.y - segment.start.y, segment.end.x - segment.start.x) * 180) / Math.PI;
+
+  return {
+    ...windowEntity,
+    x: locked.x,
+    y: locked.y,
+    width,
+    rotation,
+  };
+}
+
 interface OpeningSpan {
   start: number;
   end: number;
@@ -2780,6 +2928,7 @@ function resolveOpeningPositionWithoutOverlap(
   entities: MapEntity[],
   rectangles: MapEntity[],
   excludeEntityId?: string,
+  connectedEdgeCarveById?: Map<string, ConnectedEdgeRanges>,
 ): Point | null {
   const bumpOutSegment = getHostBumpOutSegment(entity, rectangles);
   if (bumpOutSegment && bumpOutSegment.length > Number.EPSILON) {
@@ -2852,6 +3001,22 @@ function resolveOpeningPositionWithoutOverlap(
   const desiredAxis = horizontal ? desiredPosition.x : desiredPosition.y;
 
   const blockers = getOpeningSpansForEdge(entities, hostRectId, edge, excludeEntityId);
+  if (entity.type === "window") {
+    const connectedBlockers = connectedEdgeCarveById?.get(hostRectId);
+    if (connectedBlockers) {
+      const connectedRanges =
+        edge === "top"
+          ? connectedBlockers.top
+          : edge === "bottom"
+            ? connectedBlockers.bottom
+            : edge === "left"
+              ? connectedBlockers.left
+              : connectedBlockers.right;
+      for (const range of connectedRanges) {
+        blockers.push({ start: range.start, end: range.end });
+      }
+    }
+  }
   const resolvedAxis = resolveAxisWithoutOverlap(desiredAxis, axisMin, axisMax, halfWidth, blockers);
   if (resolvedAxis === null) {
     return null;
@@ -3794,7 +3959,10 @@ export function Workspace() {
     requestedDoorKind?: DoorKind,
     maxSnapDistance = OPENING_PLACEMENT_SNAP_THRESHOLD,
   ): MapEntity | null => {
-    const snap = type === "window" ? nearestWindowHostEdge(world, rectangleEntities) : nearestRectangleEdge(world, rectangleEntities);
+    const snap =
+      type === "window"
+        ? nearestWindowHostEdge(world, rectangleEntities, conditionedConnectedEdgeRanges.carveById)
+        : nearestRectangleEdge(world, rectangleEntities);
     if (!snap || snap.distance > maxSnapDistance) {
       return null;
     }
@@ -3843,6 +4011,7 @@ export function Workspace() {
       floor.entities,
       rectangleEntities,
       entity.id,
+      conditionedConnectedEdgeRanges.carveById,
     );
     if (!resolvedPosition) {
       return null;
@@ -4298,6 +4467,7 @@ export function Workspace() {
             floor.entities,
             rectangleEntities,
             interaction.entitySnapshot.id,
+            conditionedConnectedEdgeRanges.carveById,
           ) ?? { x: interaction.entitySnapshot.x, y: interaction.entitySnapshot.y };
         dispatch({
           type: "SET_PREVIEW_ENTITY",
@@ -4326,6 +4496,7 @@ export function Workspace() {
             floor.entities,
             rectangleEntities,
             interaction.entitySnapshot.id,
+            conditionedConnectedEdgeRanges.carveById,
           ) ?? { x: interaction.entitySnapshot.x, y: interaction.entitySnapshot.y };
         dispatch({
           type: "SET_PREVIEW_ENTITY",
@@ -4623,6 +4794,7 @@ export function Workspace() {
           floor.entities,
           rectangleEntities,
           updated.id,
+          conditionedConnectedEdgeRanges.carveById,
         );
         if (!resolvedPosition) {
           return;
@@ -4689,6 +4861,7 @@ export function Workspace() {
         floor.entities,
         rectangleEntities,
         updated.id,
+        conditionedConnectedEdgeRanges.carveById,
       );
       if (!resolvedPosition) {
         return;
@@ -4933,6 +5106,7 @@ export function Workspace() {
             floor.entities,
             rectangleEntities,
             snapshot.id,
+            conditionedConnectedEdgeRanges.carveById,
           ) ?? { x: snapshot.x, y: snapshot.y };
         dispatch({ type: "MOVE_ENTITY", entityId: interaction.targetId, x: next.x, y: next.y });
       } else if (snapshot.type === "window") {
@@ -4951,6 +5125,7 @@ export function Workspace() {
             floor.entities,
             rectangleEntities,
             snapshot.id,
+            conditionedConnectedEdgeRanges.carveById,
           ) ?? { x: snapshot.x, y: snapshot.y };
         dispatch({ type: "MOVE_ENTITY", entityId: interaction.targetId, x: next.x, y: next.y });
       } else if (snapshot.type === "skylight") {
@@ -5115,6 +5290,39 @@ export function Workspace() {
           }
         } else {
           dispatch({ type: "UPSERT_ENTITY", entity: nextEntity });
+        }
+
+        if (
+          interaction.type === "resize-rect" &&
+          snapshot.type === "rectangle" &&
+          nextEntity.type === "rectangle" &&
+          isBumpOutRectangle(nextEntity)
+        ) {
+          const nextRectangles = rectangleEntities.map((entity) =>
+            entity.id === nextEntity.id ? nextEntity : entity,
+          );
+          const hostedWindows = floor.entities.filter(
+            (entity) =>
+              entity.type === "window" &&
+              entity.metadata.hostRectId === nextEntity.id &&
+              Number.isFinite(Number(entity.metadata.bumpOutSegmentIndex)),
+          );
+
+          for (const hostedWindow of hostedWindows) {
+            const synced = syncWindowToBumpOutSegment(hostedWindow, nextRectangles);
+            if (!synced) {
+              dispatch({ type: "REMOVE_ENTITY", entityId: hostedWindow.id });
+              continue;
+            }
+            if (
+              synced.x !== hostedWindow.x ||
+              synced.y !== hostedWindow.y ||
+              synced.rotation !== hostedWindow.rotation ||
+              synced.width !== hostedWindow.width
+            ) {
+              dispatch({ type: "UPSERT_ENTITY", entity: synced });
+            }
+          }
         }
         dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: nextEntity.id } });
       }
@@ -6888,16 +7096,9 @@ export function Workspace() {
 
                 {entity.type === "window" && (
                   (() => {
-                    const windowEdge = (entity.metadata.edge as RectEdge | undefined) ?? "top";
-                    const isBottomOrientedOpening = windowEdge === "bottom";
-                    const baseWindowLabelY = -WINDOW_LABEL_OFFSET;
-                    const windowLabelY =
-                      selected && isBottomOrientedOpening
-                        ? pushLabelFurtherFromOpening(
-                            baseWindowLabelY,
-                            OPENING_LABEL_UNDER_SELECTED_PADDING + WINDOW_BOTTOM_LABEL_EXTRA_PADDING,
-                          )
-                        : baseWindowLabelY;
+                    const windowLabelY = getWindowExteriorLabelY(entity, rectangleEntities, selected);
+                    const normalizedRotation = ((entity.rotation % 360) + 360) % 360;
+                    const labelNeedsFlip = normalizedRotation > 90 && normalizedRotation < 270;
                     return (
                   <text
                     x={0}
@@ -6907,7 +7108,7 @@ export function Workspace() {
                     fontSize={OPENING_SIZE_LABEL_FONT_SIZE}
                     fontWeight={900}
                     transform={
-                      windowEdge === "bottom"
+                      labelNeedsFlip
                         ? `rotate(180 0 ${windowLabelY})`
                         : undefined
                     }
@@ -7458,6 +7659,35 @@ export function Workspace() {
               },
             };
             dispatch({ type: "UPSERT_ENTITY", entity: updated });
+
+            if (isBumpOutRectangle(updated)) {
+              const nextRectangles = rectangleEntities.map((entity) =>
+                entity.id === updated.id ? updated : entity,
+              );
+              const hostedWindows = floor.entities.filter(
+                (entity) =>
+                  entity.type === "window" &&
+                  entity.metadata.hostRectId === updated.id &&
+                  Number.isFinite(Number(entity.metadata.bumpOutSegmentIndex)),
+              );
+
+              for (const hostedWindow of hostedWindows) {
+                const synced = syncWindowToBumpOutSegment(hostedWindow, nextRectangles);
+                if (!synced) {
+                  dispatch({ type: "REMOVE_ENTITY", entityId: hostedWindow.id });
+                  continue;
+                }
+                if (
+                  synced.x !== hostedWindow.x ||
+                  synced.y !== hostedWindow.y ||
+                  synced.rotation !== hostedWindow.rotation ||
+                  synced.width !== hostedWindow.width
+                ) {
+                  dispatch({ type: "UPSERT_ENTITY", entity: synced });
+                }
+              }
+            }
+
             dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: updated.id } });
             setRectangleModalState(null);
             return;
@@ -7581,6 +7811,7 @@ export function Workspace() {
             floor.entities,
             rectangleEntities,
             updated.id,
+            conditionedConnectedEdgeRanges.carveById,
           );
           if (!resolvedPosition) {
             return;
@@ -7623,6 +7854,7 @@ export function Workspace() {
             floor.entities,
             rectangleEntities,
             updated.id,
+            conditionedConnectedEdgeRanges.carveById,
           );
           if (!resolvedPosition) {
             return;
@@ -7665,6 +7897,7 @@ export function Workspace() {
             floor.entities,
             rectangleEntities,
             updated.id,
+            conditionedConnectedEdgeRanges.carveById,
           );
           if (!resolvedPosition) {
             return;

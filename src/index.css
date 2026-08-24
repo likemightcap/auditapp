@@ -121,26 +121,30 @@ select {
 
 .sidebar-collapse-btn {
   position: absolute;
-  right: -26px;
+  right: -37px;
   top: 50%;
   transform: translateY(-50%);
-  width: 28px;
-  height: 68px;
-  border: 1px solid #c8d6ea;
-  border-left: 0;
-  border-radius: 0 12px 12px 0;
-  background: linear-gradient(180deg, #fbfdff 0%, #eef4fd 100%);
+  width: 45px;
+  height: 110px;
+  border: 0;
+  border-radius: 0 19px 19px 0;
+  background: var(--bg-toolbar);
   color: #34598f;
   font-weight: 900;
-  font-size: 0.9rem;
+  font-size: 1.2rem;
   line-height: 1;
   cursor: pointer;
   z-index: 60;
-  box-shadow: 0 6px 16px rgba(33, 66, 111, 0.2);
+  box-shadow: none;
 }
 
 .sidebar-collapse-btn:hover {
   filter: brightness(1.05);
+}
+
+.sidebar-collapse-btn:focus-visible {
+  outline: 2px solid #8aa7d1;
+  outline-offset: 1px;
 }
 
 .tool-group h3,
