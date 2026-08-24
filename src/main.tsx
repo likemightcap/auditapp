@@ -5,7 +5,7 @@ import App from './App.tsx'
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    const swUrl = "./sw.js?v=20260823-v9";
+    const swUrl = "./sw.js";
     navigator.serviceWorker.register(swUrl).then((registration) => {
       registration.update().catch(() => undefined);
 

@@ -1,9 +1,9 @@
 {
-  "id": "./?app=audit-v9",
+  "id": "./",
   "name": "Audit App",
   "short_name": "Audit",
   "description": "Assessment layout editor",
-  "start_url": "./?source=pwa-v9",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "landscape",

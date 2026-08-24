@@ -1,4 +1,4 @@
-const CACHE_NAME = "audit-app-v9";
+const CACHE_NAME = "audit-app-v10";
 const APP_SHELL = [
   "./",
   "./favicon.png",
