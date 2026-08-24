@@ -5,7 +5,8 @@ import App from './App.tsx'
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js?v=20260816-v6").then((registration) => {
+    const swUrl = "./sw.js?v=20260823-v9";
+    navigator.serviceWorker.register(swUrl).then((registration) => {
       registration.update().catch(() => undefined);
 
       if (registration.waiting) {
@@ -25,7 +26,12 @@ if ("serviceWorker" in navigator) {
         });
       });
 
+      let refreshed = false;
       navigator.serviceWorker.addEventListener("controllerchange", () => {
+        if (refreshed) {
+          return;
+        }
+        refreshed = true;
         window.location.reload();
       });
     }).catch(() => undefined);

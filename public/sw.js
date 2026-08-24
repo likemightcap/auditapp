@@ -1,7 +1,7 @@
-const CACHE_NAME = "audit-app-v6";
+const CACHE_NAME = "audit-app-v9";
 const APP_SHELL = [
   "./",
-  "./favicon.svg",
+  "./favicon.png",
   "./icons/app-icon-192-v5.png",
   "./icons/app-icon-512-v5.png"
 ];

@@ -22,6 +22,15 @@ export function FloorTabs({ onRequestCreate, onRequestEdit }: FloorTabsProps) {
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [isInstalled, setIsInstalled] = useState(false);
 
+  const getInstallHelpMessage = () => {
+    const ua = window.navigator.userAgent.toLowerCase();
+    const isIos = /iphone|ipad|ipod/.test(ua);
+    if (isIos) {
+      return "On iPhone/iPad, open the Share menu and choose Add to Home Screen.";
+    }
+    return "To install on this device, use your browser's Add to Home Screen or Install App option.";
+  };
+
   useEffect(() => {
     const updateInstalled = () => {
       const standaloneMedia = window.matchMedia("(display-mode: standalone)").matches;
@@ -58,16 +67,21 @@ export function FloorTabs({ onRequestCreate, onRequestEdit }: FloorTabsProps) {
   };
 
   const handleInstall = async () => {
-    if (!deferredInstallPrompt) {
-      window.alert("To install on this device, use your browser's Add to Home Screen or Install App option.");
+    if (!deferredInstallPrompt || typeof deferredInstallPrompt.prompt !== "function") {
+      window.alert(getInstallHelpMessage());
       return;
     }
 
-    await deferredInstallPrompt.prompt();
-    const choice = await deferredInstallPrompt.userChoice;
-    if (choice.outcome === "accepted") {
+    try {
+      await deferredInstallPrompt.prompt();
+      const choice = await deferredInstallPrompt.userChoice;
       setDeferredInstallPrompt(null);
-      setIsInstalled(true);
+      if (choice.outcome === "accepted") {
+        setIsInstalled(true);
+      }
+    } catch {
+      setDeferredInstallPrompt(null);
+      window.alert(getInstallHelpMessage());
     }
   };
 
