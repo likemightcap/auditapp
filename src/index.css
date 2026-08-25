@@ -834,6 +834,66 @@ select {
   padding: 8px;
 }
 
+.workspace-bumpout-angle-control {
+  position: absolute;
+  z-index: 9;
+  width: 34px;
+  height: 176px;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  border: 1px solid rgba(214, 228, 246, 0.9);
+  background: linear-gradient(180deg, rgba(252, 254, 255, 0.92) 0%, rgba(238, 246, 255, 0.9) 100%);
+  backdrop-filter: blur(4px);
+  box-shadow: 0 10px 24px rgba(33, 66, 109, 0.2);
+}
+
+.workspace-bumpout-angle-slider {
+  width: 156px;
+  height: 30px;
+  transform: rotate(-90deg);
+  appearance: none;
+  background: transparent;
+}
+
+.workspace-bumpout-angle-slider::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #8cbcf5 0%, #5e9cea 100%);
+  box-shadow: inset 0 0 0 1px rgba(68, 113, 175, 0.22);
+}
+
+.workspace-bumpout-angle-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  margin-top: -7px;
+  border-radius: 50%;
+  border: 1px solid rgba(50, 89, 141, 0.55);
+  background: radial-gradient(circle at 35% 30%, #ffffff 0%, #f4f8ff 70%, #dbe8fb 100%);
+  box-shadow: 0 3px 8px rgba(33, 66, 109, 0.28);
+  cursor: pointer;
+}
+
+.workspace-bumpout-angle-slider::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #8cbcf5 0%, #5e9cea 100%);
+  box-shadow: inset 0 0 0 1px rgba(68, 113, 175, 0.22);
+}
+
+.workspace-bumpout-angle-slider::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid rgba(50, 89, 141, 0.55);
+  background: radial-gradient(circle at 35% 30%, #ffffff 0%, #f4f8ff 70%, #dbe8fb 100%);
+  box-shadow: 0 3px 8px rgba(33, 66, 109, 0.28);
+  cursor: pointer;
+}
+
 .workspace-zoom-slider-wrap {
   width: 34px;
   height: 176px;

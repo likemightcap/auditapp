@@ -94,6 +94,8 @@ function rectBounds(entity: MapEntity) {
 
 type BumpOutFlats = 3 | 4 | 5 | 6;
 type RectEdge = "top" | "right" | "bottom" | "left";
+const BUMPOUT_ANGLE_BIAS_MIN = -1.2;
+const BUMPOUT_ANGLE_BIAS_MAX = 1.2;
 
 function isBumpOutRectangle(entity: MapEntity): boolean {
   return entity.type === "rectangle" && entity.metadata.shapeType === "bumpout";
@@ -110,14 +112,26 @@ function getBumpOutFlats(entity: MapEntity): BumpOutFlats {
   return 5;
 }
 
+function getBumpOutAngleBias(entity: MapEntity): number {
+  const value = Number(entity.metadata.bumpOutAngleBias ?? 0);
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(BUMPOUT_ANGLE_BIAS_MIN, Math.min(BUMPOUT_ANGLE_BIAS_MAX, value));
+}
+
 function bumpOutPolygonPoints(
   width: number,
   height: number,
   flats: BumpOutFlats,
-  options?: { cornerInset?: number; rise?: number; crownWidth?: number },
+  options?: { cornerInset?: number; rise?: number; crownWidth?: number; angleBias?: number },
 ): Array<{ x: number; y: number }> {
   const w = Math.max(1, width);
   const d = Math.max(1, height);
+  const angleBias = Math.max(
+    BUMPOUT_ANGLE_BIAS_MIN,
+    Math.min(BUMPOUT_ANGLE_BIAS_MAX, Number(options?.angleBias ?? 0)),
+  );
   const rise = Math.max(1, Math.min(d, Math.round(options?.rise ?? d)));
 
   if (flats === 3 || flats === 5) {
@@ -126,7 +140,9 @@ function bumpOutPolygonPoints(
     const crownFromInset = Number.isFinite(options?.cornerInset) ? w - Math.round((options?.cornerInset ?? 0) * 2) : NaN;
     const crownRaw = Number.isFinite(crownFromInset) ? crownFromInset : Math.round(options?.crownWidth ?? defaultCrown);
     const maxCrown = Math.max(1, w - sideSegments * 2);
-    const crownWidth = Math.max(1, Math.min(maxCrown, crownRaw));
+    const crownBiasDelta = Math.round(angleBias * w * 0.26);
+    const crownMin = Math.max(1, Math.round(w * (flats === 3 ? 0.18 : 0.12)));
+    const crownWidth = Math.max(crownMin, Math.min(maxCrown, crownRaw + crownBiasDelta));
     const sideSpan = (w - crownWidth) / 2;
     const topY = d - rise;
     const sideProfiles =
@@ -140,8 +156,12 @@ function bumpOutPolygonPoints(
     const rightSide: Array<{ x: number; y: number }> = [];
     for (let index = 1; index <= sideSegments; index += 1) {
       const profile = sideProfiles[index - 1] ?? { x: index / sideSegments, y: index / sideSegments };
+      const adjustedProfileX =
+        index === sideSegments
+          ? 1
+          : Math.max(0.04, Math.min(1, profile.x * (1 - angleBias * 0.35)));
       rightSide.push({
-        x: w - sideSpan * profile.x,
+        x: w - sideSpan * adjustedProfileX,
         y: d - rise * profile.y,
       });
     }
@@ -177,8 +197,12 @@ function bumpOutPolygonPoints(
     const rightSide: Array<{ x: number; y: number }> = [];
     for (let index = 1; index <= sideSegments; index += 1) {
       const profile = sideProfiles[index - 1] ?? { x: index / sideSegments, y: index / sideSegments };
+      const adjustedProfileX =
+        index === sideSegments
+          ? 1
+          : Math.max(0.03, Math.min(1, profile.x * (1 - angleBias * 0.45)));
       rightSide.push({
-        x: w - (w / 2) * profile.x,
+        x: w - (w / 2) * adjustedProfileX,
         y: d - rise * profile.y,
       });
     }
@@ -228,10 +252,12 @@ function bumpOutWorldPolygon(entity: MapEntity): Array<{ x: number; y: number }>
   const cornerInset = Number(entity.metadata.bumpOutCornerInset);
   const rise = Number(entity.metadata.bumpOutRise);
   const crownWidth = Number(entity.metadata.bumpOutCrownWidth);
+  const angleBias = getBumpOutAngleBias(entity);
   const styleOptions = {
     cornerInset: Number.isFinite(cornerInset) ? cornerInset : undefined,
     rise: Number.isFinite(rise) ? rise : undefined,
     crownWidth: Number.isFinite(crownWidth) ? crownWidth : undefined,
+    angleBias,
   };
 
   let points = bumpOutPolygonPoints(width, height, flats, styleOptions);

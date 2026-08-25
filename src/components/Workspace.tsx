@@ -121,6 +121,8 @@ const OPENING_PREVIEW_SNAP_THRESHOLD = 3;
 const OPENING_PLACEMENT_PREVIEW_ID = "__opening-placement-preview__";
 const BUMPOUT_ASPECT_RATIO = 0.62;
 const BUMPOUT_EDGE_SNAP_THRESHOLD = 2.8;
+const BUMPOUT_ANGLE_BIAS_MIN = -1.2;
+const BUMPOUT_ANGLE_BIAS_MAX = 1.2;
 
 type BumpOutFlats = 3 | 4 | 5 | 6;
 
@@ -139,14 +141,27 @@ function getBumpOutFlats(entity: MapEntity): BumpOutFlats {
   return 5;
 }
 
+function getBumpOutAngleBias(entity: MapEntity): number {
+  const value = Number(entity.metadata.bumpOutAngleBias ?? 0);
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return clampValue(value, BUMPOUT_ANGLE_BIAS_MIN, BUMPOUT_ANGLE_BIAS_MAX);
+}
+
 function bumpOutPolygonPoints(
   width: number,
   height: number,
   flats: BumpOutFlats,
-  options?: { cornerInset?: number; rise?: number; crownWidth?: number },
+  options?: { cornerInset?: number; rise?: number; crownWidth?: number; angleBias?: number },
 ): Point[] {
   const w = Math.max(1, width);
   const d = Math.max(1, height);
+  const angleBias = clampValue(
+    Number(options?.angleBias ?? 0),
+    BUMPOUT_ANGLE_BIAS_MIN,
+    BUMPOUT_ANGLE_BIAS_MAX,
+  );
   const rise = clampValue(
     Math.round(options?.rise ?? d),
     1,
@@ -160,7 +175,9 @@ function bumpOutPolygonPoints(
     const crownFromInset = Number.isFinite(options?.cornerInset) ? w - Math.round((options?.cornerInset ?? 0) * 2) : NaN;
     const crownRaw = Number.isFinite(crownFromInset) ? crownFromInset : Math.round(options?.crownWidth ?? defaultCrown);
     const maxCrown = Math.max(1, w - sideSegments * 2);
-    const crownWidth = clampValue(crownRaw, 1, maxCrown);
+    const crownBiasDelta = Math.round(angleBias * w * 0.26);
+    const crownMin = Math.max(1, Math.round(w * (flats === 3 ? 0.18 : 0.12)));
+    const crownWidth = clampValue(crownRaw + crownBiasDelta, crownMin, maxCrown);
     const sideSpan = (w - crownWidth) / 2;
     const topY = d - rise;
     const sideProfiles =
@@ -174,8 +191,12 @@ function bumpOutPolygonPoints(
     const rightSide: Point[] = [];
     for (let index = 1; index <= sideSegments; index += 1) {
       const profile = sideProfiles[index - 1] ?? { x: index / sideSegments, y: index / sideSegments };
+      const adjustedProfileX =
+        index === sideSegments
+          ? 1
+          : clampValue(profile.x * (1 - angleBias * 0.35), 0.04, 1);
       rightSide.push({
-        x: w - sideSpan * profile.x,
+        x: w - sideSpan * adjustedProfileX,
         y: d - rise * profile.y,
       });
     }
@@ -212,8 +233,12 @@ function bumpOutPolygonPoints(
     const rightSide: Point[] = [];
     for (let index = 1; index <= sideSegments; index += 1) {
       const profile = sideProfiles[index - 1] ?? { x: index / sideSegments, y: index / sideSegments };
+      const adjustedProfileX =
+        index === sideSegments
+          ? 1
+          : clampValue(profile.x * (1 - angleBias * 0.45), 0.03, 1);
       rightSide.push({
-        x: w - (w / 2) * profile.x,
+        x: w - (w / 2) * adjustedProfileX,
         y: d - rise * profile.y,
       });
     }
@@ -260,10 +285,12 @@ function getBumpOutRenderPoints(entity: MapEntity): Point[] {
   const cornerInset = Number(entity.metadata.bumpOutCornerInset);
   const rise = Number(entity.metadata.bumpOutRise);
   const crownWidth = Number(entity.metadata.bumpOutCrownWidth);
+  const angleBias = getBumpOutAngleBias(entity);
   const styleOptions = {
     cornerInset: Number.isFinite(cornerInset) ? cornerInset : undefined,
     rise: Number.isFinite(rise) ? rise : undefined,
     crownWidth: Number.isFinite(crownWidth) ? crownWidth : undefined,
+    angleBias,
   };
 
   if (hostEdge === "left" || hostEdge === "right") {
@@ -513,6 +540,14 @@ function isWindowAxisOnConnectedEdge(
   return isAxisWithinConnectedRanges(axis, ranges.right);
 }
 
+function isSnapOnConnectedEdge(
+  snap: EdgeSnap,
+  connectedEdgeCarveById?: Map<string, ConnectedEdgeRanges>,
+): boolean {
+  const axis = snap.edge === "top" || snap.edge === "bottom" ? snap.x : snap.y;
+  return isWindowAxisOnConnectedEdge(snap.rectId, snap.edge, axis, connectedEdgeCarveById);
+}
+
 function nearestWindowHostEdge(
   point: Point,
   rectangles: MapEntity[],
@@ -700,6 +735,7 @@ function createBumpOutFromEdge(
     bumpOutCornerInset: cornerInset,
     bumpOutRise: entity.height,
     bumpOutCrownWidth: crownWidthDefault,
+    bumpOutAngleBias: 0,
   };
   return entity;
 }
@@ -940,9 +976,6 @@ function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor
           >
             {fmtFeet(lowHeight)}
           </text>
-          <text x={xCenter} y={yCenter - 0.58} textAnchor="middle" className="ceiling-caption cathedral-caption">
-            CATHEDRAL
-          </text>
           <text x={xCenter} y={yCenter + 0.74} textAnchor="middle" className="ceiling-value cathedral-value">
             {fmtFeet(highHeight)}
           </text>
@@ -978,9 +1011,6 @@ function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor
         >
           {fmtFeet(lowHeight)}
         </text>
-        <text x={xCenter} y={yCenter - 0.58} textAnchor="middle" className="ceiling-caption cathedral-caption">
-          CATHEDRAL
-        </text>
         <text x={xCenter} y={yCenter + 0.74} textAnchor="middle" className="ceiling-value cathedral-value">
           {fmtFeet(highHeight)}
         </text>
@@ -1001,9 +1031,6 @@ function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor
         />
         <text x={lineStartX + 0.55} y={yCenter + 0.88} textAnchor="start" className="ceiling-value cathedral-value">
           {fmtFeet(highHeight)}
-        </text>
-        <text x={xCenter} y={yCenter + 0.88} textAnchor="middle" className="ceiling-caption cathedral-caption">
-          SLOPED
         </text>
         <text x={lineEndX - 0.05} y={yCenter + 0.88} textAnchor="end" className="ceiling-value cathedral-value">
           {fmtFeet(lowHeight)}
@@ -1027,15 +1054,6 @@ function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor
         transform={`rotate(-90 ${xCenter - 0.62} ${lineTopY + 0.85})`}
       >
         {fmtFeet(highHeight)}
-      </text>
-      <text
-        x={xCenter - 0.62}
-        y={yCenter}
-        textAnchor="middle"
-        className="ceiling-caption cathedral-caption"
-        transform={`rotate(-90 ${xCenter - 0.62} ${yCenter})`}
-      >
-        SLOPED
       </text>
       <text
         x={xCenter - 0.62}
@@ -3531,6 +3549,12 @@ export function Workspace() {
     }
     return candidate;
   }, [floor.entities, state.selection]);
+  const selectedBumpOutEntity = useMemo(() => {
+    if (!selectedRectangleEntity || !isBumpOutRectangle(selectedRectangleEntity)) {
+      return null;
+    }
+    return selectedRectangleEntity;
+  }, [selectedRectangleEntity]);
 
   useEffect(() => {
     setBumpOutConfig({
@@ -4148,13 +4172,26 @@ export function Workspace() {
     setHoverWorld(world);
 
     if (state.activeTool === "rectangle") {
+      const selection = state.selection;
+      const selectedRectangleId =
+        selection.kind === "entity" &&
+        floor.entities.some((candidate) => candidate.id === selection.id && candidate.type === "rectangle")
+          ? selection.id
+          : null;
+      const drawStartRectangles = selectedRectangleId
+        ? rectangleEntities.filter((candidate) => candidate.id !== selectedRectangleId)
+        : rectangleEntities;
+      const nearestEdge = nearestRectangleEdge(world, drawStartRectangles);
+      const nearEligibleEdge = Boolean(nearestEdge && nearestEdge.distance <= RECT_DRAW_START_EDGE_SNAP_THRESHOLD);
       const containingRectangle = findRectangleContainingPoint(world, rectangleEntities);
-      if (containingRectangle) {
+      if (containingRectangle && !nearEligibleEdge) {
         return;
       }
 
       const baseStart = snapPointToGrid(world);
-      const snappedStart = snapRectangleStartToNearbyEdge(baseStart, rectangleEntities);
+      const snappedStart = nearEligibleEdge && nearestEdge
+        ? { x: Math.round(nearestEdge.x), y: Math.round(nearestEdge.y) }
+        : snapRectangleStartToNearbyEdge(baseStart, drawStartRectangles);
       const nextEntity = createEntityFromTool("rectangle", snappedStart.x, snappedStart.y);
       nextEntity.width = 1;
       nextEntity.height = 1;
@@ -4187,6 +4224,9 @@ export function Workspace() {
     if (state.activeTool === "bumpout") {
       const snap = nearestRectangleEdge(world, bumpOutHostRectangles);
       if (!snap || snap.distance > BUMPOUT_EDGE_SNAP_THRESHOLD) {
+        return;
+      }
+      if (isSnapOnConnectedEdge(snap, conditionedConnectedEdgeRanges.carveById)) {
         return;
       }
       const hostRect = bumpOutHostRectangles.find((candidate) => candidate.id === snap.rectId);
@@ -4360,6 +4400,9 @@ export function Workspace() {
             : (() => {
                 const snap = nearestRectangleEdge(world, bumpOutHostRectangles);
                 if (!snap || snap.distance > BUMPOUT_EDGE_SNAP_THRESHOLD) {
+                  return null;
+                }
+                if (isSnapOnConnectedEdge(snap, conditionedConnectedEdgeRanges.carveById)) {
                   return null;
                 }
                 const hostRect = bumpOutHostRectangles.find((candidate) => candidate.id === snap.rectId);
@@ -5438,6 +5481,9 @@ export function Workspace() {
       if (!snap || snap.distance > BUMPOUT_EDGE_SNAP_THRESHOLD) {
         return;
       }
+      if (isSnapOnConnectedEdge(snap, conditionedConnectedEdgeRanges.carveById)) {
+        return;
+      }
       const hostRect = bumpOutHostRectangles.find((candidate) => candidate.id === snap.rectId);
       if (!hostRect) {
         return;
@@ -5455,10 +5501,11 @@ export function Workspace() {
     }
 
     if (state.activeTool === "rectangle") {
+      const selection = state.selection;
       const isSelectedRectangle =
         entity.type === "rectangle" &&
-        state.selection.kind === "entity" &&
-        state.selection.id === entity.id;
+        selection.kind === "entity" &&
+        selection.id === entity.id;
 
       if (isSelectedRectangle) {
         const world = getEventWorld(event);
@@ -5475,8 +5522,45 @@ export function Workspace() {
         return;
       }
 
+      const world = getEventWorld(event);
+      const selectedRectangleId =
+        selection.kind === "entity" &&
+        floor.entities.some((candidate) => candidate.id === selection.id && candidate.type === "rectangle")
+          ? selection.id
+          : null;
+      const drawStartRectangles = selectedRectangleId
+        ? rectangleEntities.filter((candidate) => candidate.id !== selectedRectangleId)
+        : rectangleEntities;
+      const nearestEdge = nearestRectangleEdge(world, drawStartRectangles);
+
+      if (nearestEdge && nearestEdge.distance <= RECT_DRAW_START_EDGE_SNAP_THRESHOLD) {
+        const snappedStart = { x: Math.round(nearestEdge.x), y: Math.round(nearestEdge.y) };
+        const nextEntity = createEntityFromTool("rectangle", snappedStart.x, snappedStart.y);
+        nextEntity.width = 1;
+        nextEntity.height = 1;
+
+        startRectangleCanvasLongPress(
+          event.pointerId,
+          snappedStart,
+          { x: event.clientX, y: event.clientY },
+        );
+
+        interactionRef.current = {
+          type: "draw-rect",
+          pointerId: event.pointerId,
+          pointerType: event.pointerType,
+          startScreen: { x: event.clientX, y: event.clientY },
+          startWorld: snappedStart,
+          entitySnapshot: nextEntity,
+          sourceRectangleId: nearestEdge.rectId,
+          dragStarted: false,
+        };
+        svgRef.current?.setPointerCapture(event.pointerId);
+        return;
+      }
+
       if (entity.type === "rectangle") {
-        const world = getEventWorld(event);
+        
         const bounds = rectBoundsFromEntity(entity);
         const distanceToNearestEdge = Math.min(
           Math.abs(world.x - bounds.x),
@@ -6066,6 +6150,19 @@ export function Workspace() {
     (showResizeCursorOverlay && resizeCursorScreen) ||
     (showMoveCursorOverlay && moveCursorScreen);
   const showSelectedEditIcon = Boolean(selectedEditableEntity);
+  const selectedBumpOutAngleBias = selectedBumpOutEntity ? getBumpOutAngleBias(selectedBumpOutEntity) : 0;
+  const selectedBumpOutControlScreen = useMemo(() => {
+    if (!selectedBumpOutEntity || viewportSize.width <= 0 || viewportSize.height <= 0) {
+      return null;
+    }
+    const rect = rectBoundsFromEntity(selectedBumpOutEntity);
+    const rawX = state.camera.x + rect.x * state.camera.zoom - 34;
+    const rawY = state.camera.y + (rect.y + rect.height / 2) * state.camera.zoom;
+    return {
+      x: clampValue(rawX, 22, Math.max(22, viewportSize.width - 22)),
+      y: clampValue(rawY, 64, Math.max(64, viewportSize.height - 64)),
+    };
+  }, [selectedBumpOutEntity, state.camera.x, state.camera.y, state.camera.zoom, viewportSize.height, viewportSize.width]);
 
   return (
     <div className="workspace-wrap">
@@ -6699,21 +6796,107 @@ export function Workspace() {
                       const path = bumpOutPath(points);
                       const hostEdge = (entity.metadata.hostEdge as RectEdge | undefined) ?? "top";
                       const isUnconditioned = Boolean(entity.metadata.unconditioned);
-                      const strokeColor = selected ? "#ffe59a" : "#ffffff";
-                      const strokeWidth = selected ? 0.28 : 0.22;
+                      const strokeColor = "#ffffff";
+                      const strokeWidth = 0.22;
                       const hostCutStrokeWidth = strokeWidth + 0.08;
                       const strokeMaskId = `bumpout-stroke-mask-${entity.id}`;
+                      const connectedRanges = conditionedConnectedEdgeRanges.carveById.get(entity.id) ?? {
+                        top: [],
+                        right: [],
+                        bottom: [],
+                        left: [],
+                      };
+                      const dashRanges = conditionedConnectedEdgeRanges.dashById.get(entity.id) ?? {
+                        top: [],
+                        right: [],
+                        bottom: [],
+                        left: [],
+                      };
 
-                      let hostDashLine: ReactElement;
-                      if (hostEdge === "top") {
-                        hostDashLine = <line x1={0} y1={height} x2={width} y2={height} shapeRendering="crispEdges" />;
-                      } else if (hostEdge === "bottom") {
-                        hostDashLine = <line x1={0} y1={0} x2={width} y2={0} shapeRendering="crispEdges" />;
-                      } else if (hostEdge === "left") {
-                        hostDashLine = <line x1={width} y1={0} x2={width} y2={height} shapeRendering="crispEdges" />;
-                      } else {
-                        hostDashLine = <line x1={0} y1={0} x2={0} y2={height} shapeRendering="crispEdges" />;
-                      }
+                      const hostConnectedRanges =
+                        hostEdge === "top"
+                          ? connectedRanges.bottom
+                          : hostEdge === "bottom"
+                            ? connectedRanges.top
+                            : hostEdge === "left"
+                              ? connectedRanges.right
+                              : connectedRanges.left;
+                      const hostDashRanges =
+                        hostEdge === "top"
+                          ? dashRanges.bottom
+                          : hostEdge === "bottom"
+                            ? dashRanges.top
+                            : hostEdge === "left"
+                              ? dashRanges.right
+                              : dashRanges.left;
+
+                      const renderHostEdgeRangeLines = (
+                        ranges: EdgeRange[],
+                        keyPrefix: string,
+                        options?: {
+                          dashed?: boolean;
+                          stroke?: string;
+                          strokeWidth?: number;
+                          shapeRendering?: "crispEdges" | "geometricPrecision";
+                        },
+                      ) => {
+                        const segments: ReactElement[] = [];
+                        if (hostEdge === "top" || hostEdge === "bottom") {
+                          const y = hostEdge === "top" ? height : 0;
+                          const edgeStart = entity.x;
+                          const edgeEnd = entity.x + width;
+                          for (const range of ranges) {
+                            const start = Math.max(edgeStart, range.start);
+                            const end = Math.min(edgeEnd, range.end);
+                            if (end <= start) {
+                              continue;
+                            }
+                            segments.push(
+                              <line
+                                key={`${keyPrefix}-${start}-${end}`}
+                                x1={start - entity.x}
+                                y1={y}
+                                x2={end - entity.x}
+                                y2={y}
+                                stroke={options?.stroke ?? strokeColor}
+                                strokeWidth={options?.strokeWidth ?? strokeWidth}
+                                strokeDasharray={options?.dashed ? "0.5 0.3" : undefined}
+                                strokeDashoffset={options?.dashed ? getAlignedDashOffset(start) : undefined}
+                                strokeLinecap="butt"
+                                shapeRendering={options?.shapeRendering ?? "geometricPrecision"}
+                              />,
+                            );
+                          }
+                          return segments;
+                        }
+
+                        const x = hostEdge === "left" ? width : 0;
+                        const edgeStart = entity.y;
+                        const edgeEnd = entity.y + height;
+                        for (const range of ranges) {
+                          const start = Math.max(edgeStart, range.start);
+                          const end = Math.min(edgeEnd, range.end);
+                          if (end <= start) {
+                            continue;
+                          }
+                          segments.push(
+                            <line
+                              key={`${keyPrefix}-${start}-${end}`}
+                              x1={x}
+                              y1={start - entity.y}
+                              x2={x}
+                              y2={end - entity.y}
+                              stroke={options?.stroke ?? strokeColor}
+                              strokeWidth={options?.strokeWidth ?? strokeWidth}
+                              strokeDasharray={options?.dashed ? "0.5 0.3" : undefined}
+                              strokeDashoffset={options?.dashed ? getAlignedDashOffset(start) : undefined}
+                              strokeLinecap="butt"
+                              shapeRendering={options?.shapeRendering ?? "geometricPrecision"}
+                            />,
+                          );
+                        }
+                        return segments;
+                      };
 
                       return (
                         <>
@@ -6731,14 +6914,11 @@ export function Workspace() {
                           />
                           <mask id={strokeMaskId} maskUnits="userSpaceOnUse" x={-1} y={-1} width={width + 2} height={height + 2}>
                             <rect x={-1} y={-1} width={width + 2} height={height + 2} fill="#ffffff" />
-                            <g
-                              pointerEvents="none"
-                              stroke="#000000"
-                              strokeWidth={hostCutStrokeWidth}
-                              shapeRendering="crispEdges"
-                            >
-                              {hostDashLine}
-                            </g>
+                            {renderHostEdgeRangeLines(hostConnectedRanges, `${entity.id}-cut-host`, {
+                              stroke: "#000000",
+                              strokeWidth: hostCutStrokeWidth,
+                              shapeRendering: "crispEdges",
+                            })}
                           </mask>
                           <path
                             d={`${path} Z`}
@@ -6749,17 +6929,8 @@ export function Workspace() {
                             shapeRendering="crispEdges"
                             mask={`url(#${strokeMaskId})`}
                           />
-                          <g
-                            pointerEvents="none"
-                            stroke={strokeColor}
-                            strokeWidth={strokeWidth}
-                            strokeDasharray="0.5 0.3"
-                            strokeDashoffset={hostEdge === "top" || hostEdge === "bottom" ? getAlignedDashOffset(entity.x) : getAlignedDashOffset(entity.y)}
-                            strokeLinecap="butt"
-                            opacity={1}
-                            shapeRendering="crispEdges"
-                          >
-                            {hostDashLine}
+                          <g pointerEvents="none">
+                            {renderHostEdgeRangeLines(hostDashRanges, `${entity.id}-dash-host`, { dashed: true })}
                           </g>
                         </>
                       );
@@ -7231,6 +7402,19 @@ export function Workspace() {
 
             return (
               <g className="rect-resize-controls">
+                {isBumpOutRectangle(selectedRectangleEntity) && (
+                  <rect
+                    x={x1}
+                    y={y1}
+                    width={Math.max(0.2, rect.width)}
+                    height={Math.max(0.2, rect.height)}
+                    fill="none"
+                    stroke="#ffe59a"
+                    strokeWidth={0.16}
+                    rx={0.1}
+                    pointerEvents="none"
+                  />
+                )}
                 <line
                   x1={x1}
                   y1={y1}
@@ -7621,6 +7805,52 @@ export function Workspace() {
           )}
         </button>
       </div>
+
+      {selectedBumpOutEntity && selectedBumpOutControlScreen && (
+        <div
+          className="workspace-bumpout-angle-control"
+          style={{ left: `${selectedBumpOutControlScreen.x}px`, top: `${selectedBumpOutControlScreen.y}px` }}
+          onPointerDown={(event) => {
+            event.stopPropagation();
+          }}
+          onPointerMove={(event) => {
+            event.stopPropagation();
+          }}
+          onPointerUp={(event) => {
+            event.stopPropagation();
+          }}
+        >
+          <input
+            type="range"
+            min={Math.round(BUMPOUT_ANGLE_BIAS_MIN * 100)}
+            max={Math.round(BUMPOUT_ANGLE_BIAS_MAX * 100)}
+            step={1}
+            value={Math.round(selectedBumpOutAngleBias * 100)}
+            onPointerDown={(event) => {
+              event.stopPropagation();
+            }}
+            onChange={(event) => {
+              const nextBias = clampValue(
+                Number(event.target.value) / 100,
+                BUMPOUT_ANGLE_BIAS_MIN,
+                BUMPOUT_ANGLE_BIAS_MAX,
+              );
+              dispatch({
+                type: "UPSERT_ENTITY",
+                entity: {
+                  ...selectedBumpOutEntity,
+                  metadata: {
+                    ...selectedBumpOutEntity.metadata,
+                    bumpOutAngleBias: nextBias,
+                  },
+                },
+              });
+            }}
+            className="workspace-bumpout-angle-slider"
+            aria-label="Adjust bump out segment angles"
+          />
+        </div>
+      )}
 
       <RectangleModal
         isOpen={rectangleModalState !== null}
