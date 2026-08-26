@@ -141,15 +141,22 @@ function cloneRectanglesForDuplicate(sourceFloor: FloorData): MapEntity[] {
     }));
 }
 
-function cloneRectanglesForLevelCopyAsBasic(sourceFloor: FloorData): MapEntity[] {
+function cloneRectanglesForLevelCopyAsBasic(
+  sourceFloor: FloorData,
+  targetPreset: FloorPreset,
+  targetFloorUnconditioned: boolean,
+): MapEntity[] {
+  const isAtticTarget = isAtticPreset(targetPreset);
+  const isBasementTarget = isBasementPreset(targetPreset);
+
   return sourceFloor.entities
     .filter((entity) => entity.type === "rectangle")
     .map((entity) => ({
       ...entity,
       id: uid("ent"),
-      label: "",
+      label: isAtticTarget ? "FLAT" : isBasementTarget ? "BASEMENT" : "",
       metadata: {
-        color: "BLUE",
+        color: isAtticTarget ? "RED" : isBasementTarget && targetFloorUnconditioned ? "RED" : "BLUE",
         unconditioned: false,
         ceilingType: "standard",
         standardHeightFt: 8,
@@ -761,7 +768,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       if (action.copyFromFloorId) {
         const source = state.project.floors.find((floor) => floor.id === action.copyFromFloorId);
         if (source) {
-          nextFloor.entities = cloneRectanglesForLevelCopyAsBasic(source);
+          nextFloor.entities = cloneRectanglesForLevelCopyAsBasic(source, preset, nextFloor.unconditioned);
           nextFloor.duplicateConditionedBaseline = conditionedRectangleBaselineForFloor(source);
         }
       }

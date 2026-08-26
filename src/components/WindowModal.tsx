@@ -45,6 +45,8 @@ function clampToPositiveInt(value: number): number {
 export function WindowModal({ isOpen, initialWidthFt, initialHeightFt, onCancel, onSubmit }: WindowModalProps) {
   const [widthFt, setWidthFt] = useState(3);
   const [heightFt, setHeightFt] = useState(4);
+  const [widthDraft, setWidthDraft] = useState("3");
+  const [heightDraft, setHeightDraft] = useState("4");
   const [selectedPreset, setSelectedPreset] = useState<string>(presetKey(3, 4));
 
   useEffect(() => {
@@ -56,6 +58,8 @@ export function WindowModal({ isOpen, initialWidthFt, initialHeightFt, onCancel,
     const nextPresetKey = findPresetKey(nextWidth, nextHeight);
     setWidthFt(nextWidth);
     setHeightFt(nextHeight);
+    setWidthDraft(String(nextWidth));
+    setHeightDraft(String(nextHeight));
     setSelectedPreset(nextPresetKey ?? CUSTOM_PRESET_KEY);
   }, [initialHeightFt, initialWidthFt, isOpen]);
 
@@ -90,6 +94,8 @@ export function WindowModal({ isOpen, initialWidthFt, initialHeightFt, onCancel,
               const nextHeight = clampToPositiveInt(Number(nextHeightRaw));
               setWidthFt(nextWidth);
               setHeightFt(nextHeight);
+              setWidthDraft(String(nextWidth));
+              setHeightDraft(String(nextHeight));
             }}
           >
             {WINDOW_PRESETS.map((preset) => (
@@ -109,6 +115,7 @@ export function WindowModal({ isOpen, initialWidthFt, initialHeightFt, onCancel,
               onClick={() => {
                 const nextWidth = Math.max(1, widthFt - 1);
                 setWidthFt(nextWidth);
+                setWidthDraft(String(nextWidth));
                 syncPresetFromValues(nextWidth, heightFt);
               }}
             >
@@ -118,10 +125,34 @@ export function WindowModal({ isOpen, initialWidthFt, initialHeightFt, onCancel,
               type="number"
               min={1}
               step={1}
-              value={widthFt}
+              value={widthDraft}
               onChange={(event) => {
-                const nextWidth = clampToPositiveInt(Number(event.target.value));
+                const raw = event.target.value;
+                setWidthDraft(raw);
+                if (raw.trim() === "") {
+                  return;
+                }
+                const parsed = Number(raw);
+                if (!Number.isFinite(parsed)) {
+                  return;
+                }
+                const nextWidth = clampToPositiveInt(parsed);
                 setWidthFt(nextWidth);
+                syncPresetFromValues(nextWidth, heightFt);
+              }}
+              onBlur={() => {
+                if (widthDraft.trim() === "") {
+                  setWidthDraft(String(widthFt));
+                  return;
+                }
+                const parsed = Number(widthDraft);
+                if (!Number.isFinite(parsed)) {
+                  setWidthDraft(String(widthFt));
+                  return;
+                }
+                const nextWidth = clampToPositiveInt(parsed);
+                setWidthFt(nextWidth);
+                setWidthDraft(String(nextWidth));
                 syncPresetFromValues(nextWidth, heightFt);
               }}
             />
@@ -131,6 +162,7 @@ export function WindowModal({ isOpen, initialWidthFt, initialHeightFt, onCancel,
               onClick={() => {
                 const nextWidth = Math.max(1, widthFt + 1);
                 setWidthFt(nextWidth);
+                setWidthDraft(String(nextWidth));
                 syncPresetFromValues(nextWidth, heightFt);
               }}
             >
@@ -147,6 +179,7 @@ export function WindowModal({ isOpen, initialWidthFt, initialHeightFt, onCancel,
               onClick={() => {
                 const nextHeight = Math.max(1, heightFt - 1);
                 setHeightFt(nextHeight);
+                setHeightDraft(String(nextHeight));
                 syncPresetFromValues(widthFt, nextHeight);
               }}
             >
@@ -156,10 +189,34 @@ export function WindowModal({ isOpen, initialWidthFt, initialHeightFt, onCancel,
               type="number"
               min={1}
               step={1}
-              value={heightFt}
+              value={heightDraft}
               onChange={(event) => {
-                const nextHeight = clampToPositiveInt(Number(event.target.value));
+                const raw = event.target.value;
+                setHeightDraft(raw);
+                if (raw.trim() === "") {
+                  return;
+                }
+                const parsed = Number(raw);
+                if (!Number.isFinite(parsed)) {
+                  return;
+                }
+                const nextHeight = clampToPositiveInt(parsed);
                 setHeightFt(nextHeight);
+                syncPresetFromValues(widthFt, nextHeight);
+              }}
+              onBlur={() => {
+                if (heightDraft.trim() === "") {
+                  setHeightDraft(String(heightFt));
+                  return;
+                }
+                const parsed = Number(heightDraft);
+                if (!Number.isFinite(parsed)) {
+                  setHeightDraft(String(heightFt));
+                  return;
+                }
+                const nextHeight = clampToPositiveInt(parsed);
+                setHeightFt(nextHeight);
+                setHeightDraft(String(nextHeight));
                 syncPresetFromValues(widthFt, nextHeight);
               }}
             />
@@ -169,6 +226,7 @@ export function WindowModal({ isOpen, initialWidthFt, initialHeightFt, onCancel,
               onClick={() => {
                 const nextHeight = Math.max(1, heightFt + 1);
                 setHeightFt(nextHeight);
+                setHeightDraft(String(nextHeight));
                 syncPresetFromValues(widthFt, nextHeight);
               }}
             >

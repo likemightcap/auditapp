@@ -43,13 +43,16 @@ const FLAT_OPTIONS: Array<{ flats: 3 | 4 | 5 | 6 }> = [
 export function BumpOutModal({ isOpen, initialFlats, initialLongEdgeFt, onCancel, onSubmit }: BumpOutModalProps) {
   const [flats, setFlats] = useState<3 | 4 | 5 | 6>(5);
   const [longEdgeFt, setLongEdgeFt] = useState(8);
+  const [longEdgeDraft, setLongEdgeDraft] = useState("8");
 
   useEffect(() => {
     if (!isOpen) {
       return;
     }
     setFlats(initialFlats);
-    setLongEdgeFt(clampToPositiveInt(initialLongEdgeFt));
+    const nextLongEdge = clampToPositiveInt(initialLongEdgeFt);
+    setLongEdgeFt(nextLongEdge);
+    setLongEdgeDraft(String(nextLongEdge));
   }, [initialFlats, initialLongEdgeFt, isOpen]);
 
   const canSubmit = useMemo(() => longEdgeFt >= 1, [longEdgeFt]);
@@ -92,7 +95,11 @@ export function BumpOutModal({ isOpen, initialFlats, initialLongEdgeFt, onCancel
             <button
               type="button"
               onClick={() => {
-                setLongEdgeFt((current) => Math.max(1, current - 1));
+                setLongEdgeFt((current) => {
+                  const next = Math.max(1, current - 1);
+                  setLongEdgeDraft(String(next));
+                  return next;
+                });
               }}
             >
               ▼
@@ -101,14 +108,43 @@ export function BumpOutModal({ isOpen, initialFlats, initialLongEdgeFt, onCancel
               type="number"
               min={1}
               step={1}
-              value={longEdgeFt}
-              onChange={(event) => setLongEdgeFt(clampToPositiveInt(Number(event.target.value)))}
+              value={longEdgeDraft}
+              onChange={(event) => {
+                const raw = event.target.value;
+                setLongEdgeDraft(raw);
+                if (raw.trim() === "") {
+                  return;
+                }
+                const parsed = Number(raw);
+                if (!Number.isFinite(parsed)) {
+                  return;
+                }
+                setLongEdgeFt(clampToPositiveInt(parsed));
+              }}
+              onBlur={() => {
+                if (longEdgeDraft.trim() === "") {
+                  setLongEdgeDraft(String(longEdgeFt));
+                  return;
+                }
+                const parsed = Number(longEdgeDraft);
+                if (!Number.isFinite(parsed)) {
+                  setLongEdgeDraft(String(longEdgeFt));
+                  return;
+                }
+                const nextLongEdge = clampToPositiveInt(parsed);
+                setLongEdgeFt(nextLongEdge);
+                setLongEdgeDraft(String(nextLongEdge));
+              }}
             />
             <span className="unit">'</span>
             <button
               type="button"
               onClick={() => {
-                setLongEdgeFt((current) => Math.max(1, current + 1));
+                setLongEdgeFt((current) => {
+                  const next = Math.max(1, current + 1);
+                  setLongEdgeDraft(String(next));
+                  return next;
+                });
               }}
             >
               ▲

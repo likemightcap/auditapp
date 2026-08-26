@@ -18,6 +18,7 @@ import resizeIcon from "../../assets/svgs/resize-icon.svg";
 import moveIcon from "../../assets/svgs/move-icon.svg";
 import editIcon from "../../assets/svgs/edit-icon.svg";
 import lockIcon from "../../assets/svgs/lock-icon.svg";
+import floorplanIcon from "../../assets/svgs/floorplan-icon.svg";
 import doorToolIcon from "../../assets/building-icons/door.png";
 import doubleDoorToolIcon from "../../assets/building-icons/double-door.png";
 import slidingGlassToolIcon from "../../assets/building-icons/sliding-glass.png";
@@ -27,7 +28,7 @@ import { useEditor } from "../state/EditorContext";
 import { createEntityFromTool, createWallPoint, createWallSegment } from "../state/editorReducer";
 import { getToolDefinition } from "../tools/toolDefinitions";
 import { getUtilityIconByEntityType, isUtilityEntityType, isUtilityToolId } from "../assets/utilityIcons";
-import { inferFloorPresetFromName, isAtticPreset, sortFloorsByPresetOrder } from "../constants/floors";
+import { inferFloorPresetFromName, isAtticPreset, isBasementPreset, sortFloorsByPresetOrder } from "../constants/floors";
 import type { MapEntity, Orientation, Point, ToolId, WallPoint, WallSegment } from "../types";
 import {
   clamp,
@@ -930,7 +931,7 @@ function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor
           className="ceiling-height-box"
         />
         <text x={xCenter} y={heightTitleY} textAnchor="middle" className="ceiling-caption">
-          HEIGHT
+          CEILING
         </text>
         <text x={xCenter} y={heightValueY} textAnchor="middle" className="ceiling-label">
           {fmtFeet(standardHeight)}
@@ -3462,7 +3463,9 @@ export function Workspace() {
     };
   const { state, dispatch } = useEditor();
   const floor = getFloor(state);
-  const isActiveFloorAttic = isAtticPreset(floor.floorPreset ?? inferFloorPresetFromName(floor.name));
+  const activeFloorPreset = floor.floorPreset ?? inferFloorPresetFromName(floor.name);
+  const isActiveFloorAttic = isAtticPreset(activeFloorPreset);
+  const isActiveFloorFirst = activeFloorPreset === "FIRST_FLOOR";
   const lockedToolId = typeof state.project.metadata.lockedToolId === "string" ? (state.project.metadata.lockedToolId as ToolId) : null;
   const toolLockEnabled = Boolean(state.project.metadata.toolLockEnabled) && lockedToolId !== null;
   const activeToolIsLockable = isLockableTool(state.activeTool);
@@ -3503,6 +3506,7 @@ export function Workspace() {
     longEdgeFt: defaultBumpOutLongEdgeFt,
   });
   const [cameraPanelCollapsed, setCameraPanelCollapsed] = useState(false);
+  const [showSupportingFloorplan, setShowSupportingFloorplan] = useState(false);
   const [resizeHint, setResizeHint] = useState<ResizeHintState | null>(null);
   const [hoveredSelectedEntityId, setHoveredSelectedEntityId] = useState<string | null>(null);
   const [openingPlacementPreview, setOpeningPlacementPreview] = useState<MapEntity | null>(null);
@@ -3856,10 +3860,25 @@ export function Workspace() {
   };
 
   const openCreateRectangleModal = (anchor: Point) => {
+    const initialValues: RectangleModalInitialValues =
+      activeFloorPreset === "ATTIC"
+        ? {
+            ...DEFAULT_RECTANGLE_MODAL_VALUES,
+            label: "FLAT",
+            color: "RED",
+          }
+        : activeFloorPreset === "BASEMENT_CRAWLSPACE"
+          ? {
+              ...DEFAULT_RECTANGLE_MODAL_VALUES,
+              label: "BASEMENT",
+              color: floor.unconditioned ? "RED" : "BLUE",
+            }
+          : DEFAULT_RECTANGLE_MODAL_VALUES;
+
     setRectangleModalState({
       mode: "create",
       anchor: { x: Math.round(anchor.x), y: Math.round(anchor.y) },
-      initialValues: DEFAULT_RECTANGLE_MODAL_VALUES,
+      initialValues,
     });
   };
 
@@ -6045,7 +6064,67 @@ export function Workspace() {
 
   const renderedNonTextEntities = displayEntities.filter((entity) => entity.type !== "text");
   const renderedTextEntities = displayEntities.filter((entity) => entity.type === "text");
+  const supportingFloorForGhost = useMemo(() => {
+    const orderedFloors = sortFloorsByPresetOrder(state.project.floors);
+    const activeFloor = orderedFloors.find((candidate) => candidate.id === floor.id);
+    if (!activeFloor) {
+      return null;
+    }
+
+    const activePreset = activeFloor.floorPreset ?? inferFloorPresetFromName(activeFloor.name);
+    if (isBasementPreset(activePreset)) {
+      return (
+        orderedFloors.find((candidate) => {
+          if (candidate.id === activeFloor.id) {
+            return false;
+          }
+          const candidatePreset = candidate.floorPreset ?? inferFloorPresetFromName(candidate.name);
+          return candidatePreset === "FIRST_FLOOR";
+        }) ?? null
+      );
+    }
+
+    const activeIndex = orderedFloors.findIndex((candidate) => candidate.id === activeFloor.id);
+    if (activeIndex <= 0) {
+      return null;
+    }
+
+    return orderedFloors[activeIndex - 1] ?? null;
+  }, [floor.id, state.project.floors]);
+  const canShowSupportingFloorplan = Boolean(supportingFloorForGhost);
+  const supportingFloorPointById = useMemo(
+    () => new Map((supportingFloorForGhost?.wallPoints ?? []).map((point) => [point.id, point])),
+    [supportingFloorForGhost],
+  );
+  const supportingFloorNonTextEntities = useMemo(() => {
+    if (!supportingFloorForGhost) {
+      return [] as MapEntity[];
+    }
+    return supportingFloorForGhost.entities
+      .map((entity, index) => ({ entity, index }))
+      .sort((a, b) => {
+        const aLayer = a.entity.type === "rectangle" ? 0 : 1;
+        const bLayer = b.entity.type === "rectangle" ? 0 : 1;
+        if (aLayer !== bLayer) {
+          return aLayer - bLayer;
+        }
+        return a.index - b.index;
+      })
+      .map((item) => item.entity)
+      .filter((entity) => entity.type !== "text");
+  }, [supportingFloorForGhost]);
+
+  useEffect(() => {
+    if (!canShowSupportingFloorplan && showSupportingFloorplan) {
+      setShowSupportingFloorplan(false);
+    }
+  }, [canShowSupportingFloorplan, showSupportingFloorplan]);
+
   const duplicateConditionedBaseline = useMemo(() => {
+    if (isActiveFloorFirst) {
+      return null;
+    }
+
     const orderedFloors = sortFloorsByPresetOrder(state.project.floors);
     const activeIndex = orderedFloors.findIndex((candidate) => candidate.id === floor.id);
     if (activeIndex <= 0) {
@@ -6060,7 +6139,7 @@ export function Workspace() {
     return supportingFloor.entities
       .filter((entity) => entity.type === "rectangle" && !Boolean(entity.metadata.unconditioned))
       .map((entity) => rectBoundsFromEntity(entity));
-  }, [floor.id, state.project.floors]);
+  }, [floor.id, isActiveFloorFirst, state.project.floors]);
   const hideLinearMarkers =
     interactionRef.current.type === "draw-rect" ||
     (interactionRef.current.type === "resize-rect" && interactionRef.current.entitySnapshot?.type === "rectangle") ||
@@ -6259,6 +6338,227 @@ export function Workspace() {
             rectangleGuideGroups.map((group, index) => (
               <PerimeterGuides key={`rg-perimeter-${index}`} guides={group.guides} />
             ))}
+
+          {showSupportingFloorplan && supportingFloorForGhost && (
+            <g className="workspace-floorplan-ghost" pointerEvents="none">
+              {supportingFloorForGhost.wallSegments.map((segment) => {
+                const start = supportingFloorPointById.get(segment.startPointId);
+                const end = supportingFloorPointById.get(segment.endPointId);
+                if (!start || !end) {
+                  return null;
+                }
+                return (
+                  <line
+                    key={`ghost-wall-${segment.id}`}
+                    x1={start.x}
+                    y1={start.y}
+                    x2={end.x}
+                    y2={end.y}
+                    stroke="#e5f0ff"
+                    strokeWidth={0.42}
+                    strokeOpacity={0.42}
+                    vectorEffect="non-scaling-stroke"
+                  />
+                );
+              })}
+
+              {supportingFloorNonTextEntities.map((entity) => {
+                if (entity.type === "rectangle" && isBumpOutRectangle(entity)) {
+                  const points = getBumpOutRenderPoints(entity);
+                  const path = bumpOutPath(points);
+                  return (
+                    <g key={`ghost-entity-${entity.id}`} transform={`translate(${entity.x} ${entity.y}) rotate(${entity.rotation})`}>
+                      <path
+                        d={`${path} Z`}
+                        fill="rgba(229, 240, 255, 0.12)"
+                        stroke="#e5f0ff"
+                        strokeWidth={0.2}
+                        strokeOpacity={0.5}
+                      />
+                    </g>
+                  );
+                }
+
+                if (entity.type === "rectangle") {
+                  return (
+                    <g key={`ghost-entity-${entity.id}`} transform={`translate(${entity.x} ${entity.y}) rotate(${entity.rotation})`}>
+                      <rect
+                        x={0}
+                        y={0}
+                        width={Math.max(entity.width, 0.4)}
+                        height={Math.max(entity.height, 0.4)}
+                        rx={0.1}
+                        fill="rgba(229, 240, 255, 0.08)"
+                        stroke="#e5f0ff"
+                        strokeWidth={0.2}
+                        strokeOpacity={0.46}
+                      />
+                    </g>
+                  );
+                }
+
+                if (entity.type === "line") {
+                  return (
+                    <g key={`ghost-entity-${entity.id}`} transform={`translate(${entity.x} ${entity.y}) rotate(${entity.rotation})`}>
+                      <line
+                        x1={0}
+                        y1={0}
+                        x2={entity.width}
+                        y2={entity.height}
+                        stroke="#e5f0ff"
+                        strokeWidth={0.26}
+                        strokeOpacity={0.44}
+                      />
+                    </g>
+                  );
+                }
+
+                if (entity.type === "window") {
+                  return (
+                    <g key={`ghost-entity-${entity.id}`} transform={`translate(${entity.x} ${entity.y}) rotate(${entity.rotation})`}>
+                      <line
+                        x1={-entity.width / 2}
+                        y1={0}
+                        x2={entity.width / 2}
+                        y2={0}
+                        stroke="#d9ebff"
+                        strokeWidth={0.28}
+                        strokeOpacity={0.56}
+                        strokeLinecap="round"
+                      />
+                    </g>
+                  );
+                }
+
+                if (entity.type === "door") {
+                  const doorKind = getDoorKind(entity);
+                  const doorVisualWidth = Math.max(1, getDoorVisualWidth(entity));
+                  const flipSign = Boolean(entity.metadata.flipped) ? -1 : 1;
+                  const mirrorSign = Boolean(entity.metadata.mirrored) ? -1 : 1;
+                  const halfLeaf = doorVisualWidth / 2;
+                  const wedgePath = `M ${-doorVisualWidth / 2} 0 L ${doorVisualWidth / 2} 0 A ${doorVisualWidth} ${doorVisualWidth} 0 0 1 ${-doorVisualWidth / 2} ${doorVisualWidth} Z`;
+                  const leftLeafPath = `M ${-doorVisualWidth / 2} 0 L 0 0 A ${halfLeaf} ${halfLeaf} 0 0 1 ${-doorVisualWidth / 2} ${halfLeaf} Z`;
+                  const rightLeafPath = `M ${doorVisualWidth / 2} 0 L 0 0 A ${halfLeaf} ${halfLeaf} 0 0 0 ${doorVisualWidth / 2} ${halfLeaf} Z`;
+
+                  if (doorKind === "sliding") {
+                    return (
+                      <g key={`ghost-entity-${entity.id}`} transform={`translate(${entity.x} ${entity.y}) rotate(${entity.rotation})`}>
+                        <rect
+                          x={-doorVisualWidth / 2}
+                          y={-WINDOW_FILL_THICKNESS / 2}
+                          width={doorVisualWidth}
+                          height={WINDOW_FILL_THICKNESS}
+                          fill="none"
+                          stroke="#d9ebff"
+                          strokeWidth={0.22}
+                          strokeOpacity={0.58}
+                        />
+                        <line
+                          x1={0}
+                          y1={-WINDOW_FILL_THICKNESS / 2}
+                          x2={0}
+                          y2={WINDOW_FILL_THICKNESS / 2}
+                          stroke="#d9ebff"
+                          strokeWidth={0.14}
+                          strokeOpacity={0.58}
+                        />
+                      </g>
+                    );
+                  }
+
+                  return (
+                    <g key={`ghost-entity-${entity.id}`} transform={`translate(${entity.x} ${entity.y}) rotate(${entity.rotation})`}>
+                      <g transform={`scale(${mirrorSign} ${flipSign})`}>
+                        {doorKind === "double" ? (
+                          <>
+                            <path d={leftLeafPath} fill="none" stroke="#d9ebff" strokeWidth={0.2} strokeOpacity={0.58} />
+                            <path d={rightLeafPath} fill="none" stroke="#d9ebff" strokeWidth={0.2} strokeOpacity={0.58} />
+                            <line
+                              x1={-doorVisualWidth / 2}
+                              y1={0}
+                              x2={doorVisualWidth / 2}
+                              y2={0}
+                              stroke="#d9ebff"
+                              strokeWidth={0.18}
+                              strokeOpacity={0.58}
+                            />
+                          </>
+                        ) : (
+                          <>
+                            <path d={wedgePath} fill="none" stroke="#d9ebff" strokeWidth={0.2} strokeOpacity={0.58} />
+                            <line
+                              x1={-doorVisualWidth / 2}
+                              y1={0}
+                              x2={doorVisualWidth / 2}
+                              y2={0}
+                              stroke="#d9ebff"
+                              strokeWidth={0.18}
+                              strokeOpacity={0.58}
+                            />
+                          </>
+                        )}
+                      </g>
+                    </g>
+                  );
+                }
+
+                if (entity.type === "skylight") {
+                  return (
+                    <g key={`ghost-entity-${entity.id}`} transform={`translate(${entity.x} ${entity.y}) rotate(${entity.rotation})`}>
+                      <rect
+                        x={-entity.width / 2}
+                        y={-entity.height / 2}
+                        width={Math.max(entity.width, 0.4)}
+                        height={Math.max(entity.height, 0.4)}
+                        fill="none"
+                        stroke="#d9ebff"
+                        strokeWidth={0.2}
+                        strokeOpacity={0.54}
+                      />
+                      <line
+                        x1={-entity.width / 2}
+                        y1={-entity.height / 2}
+                        x2={entity.width / 2}
+                        y2={entity.height / 2}
+                        stroke="#d9ebff"
+                        strokeWidth={0.12}
+                        strokeOpacity={0.44}
+                      />
+                      <line
+                        x1={entity.width / 2}
+                        y1={-entity.height / 2}
+                        x2={-entity.width / 2}
+                        y2={entity.height / 2}
+                        stroke="#d9ebff"
+                        strokeWidth={0.12}
+                        strokeOpacity={0.44}
+                      />
+                    </g>
+                  );
+                }
+
+                if (isUtilityEntityType(entity.type)) {
+                  return (
+                    <g key={`ghost-entity-${entity.id}`} transform={`translate(${entity.x} ${entity.y}) rotate(${entity.rotation})`}>
+                      <rect
+                        x={-entity.width / 2}
+                        y={-entity.height / 2}
+                        width={Math.max(entity.width, 0.4)}
+                        height={Math.max(entity.height, 0.4)}
+                        rx={0.08}
+                        fill="none"
+                        stroke="#d9ebff"
+                        strokeWidth={0.18}
+                        strokeOpacity={0.46}
+                      />
+                    </g>
+                  );
+                }
+
+                return null;
+              })}
+            </g>
+          )}
 
           {floor.wallSegments.map((segment) => {
             const start = pointById.get(segment.startPointId);
@@ -7207,7 +7507,7 @@ export function Workspace() {
                   />
                 )}
 
-                {entity.type === "rectangle" && sharedCeilingOverlayPlacement.visibleIds.has(entity.id) && (
+                {entity.type === "rectangle" && !isActiveFloorAttic && sharedCeilingOverlayPlacement.visibleIds.has(entity.id) && (
                   <RectangleCeilingOverlay entity={entity} anchor={sharedCeilingOverlayPlacement.anchorById.get(entity.id)} />
                 )}
 
@@ -7733,77 +8033,97 @@ export function Workspace() {
         {state.project.orientation}
       </button>
 
-      <div className={`workspace-camera-controls ${showCameraTools ? "" : "is-collapsed"}`} aria-label="Workspace camera controls">
-        {showCameraTools && (
-          <>
-            <div className="workspace-zoom-slider-wrap">
-              <input
-                type="range"
-                min={MIN_ZOOM}
-                max={MAX_ZOOM}
-                step={0.01}
-                value={state.camera.zoom}
-                onChange={(event) => handleZoomSliderChange(Number(event.target.value))}
-                className="workspace-zoom-slider"
-                aria-label="Zoom"
-              />
-            </div>
+      <div className="workspace-camera-stack">
+        <button
+          type="button"
+          className={`workspace-floorplan-btn ${showSupportingFloorplan ? "is-active" : ""}`}
+          onClick={() => setShowSupportingFloorplan((current) => !current)}
+          title={
+            canShowSupportingFloorplan
+              ? showSupportingFloorplan
+                ? "Hide supporting floor plan"
+                : "Show supporting floor plan"
+              : "No supporting floor available"
+          }
+          aria-label={showSupportingFloorplan ? "Hide supporting floor plan" : "Show supporting floor plan"}
+          aria-pressed={showSupportingFloorplan}
+          disabled={!canShowSupportingFloorplan}
+        >
+          <img src={floorplanIcon} alt="" className="workspace-floorplan-btn-icon" />
+        </button>
 
-            <button
-              type="button"
-              className="workspace-frame-btn"
-              onClick={centerFrameWorkspace}
-              title="Frame workspace"
-              aria-label="Frame workspace"
-            >
+        <div className={`workspace-camera-controls ${showCameraTools ? "" : "is-collapsed"}`} aria-label="Workspace camera controls">
+          {showCameraTools && (
+            <>
+              <div className="workspace-zoom-slider-wrap">
+                <input
+                  type="range"
+                  min={MIN_ZOOM}
+                  max={MAX_ZOOM}
+                  step={0.01}
+                  value={state.camera.zoom}
+                  onChange={(event) => handleZoomSliderChange(Number(event.target.value))}
+                  className="workspace-zoom-slider"
+                  aria-label="Zoom"
+                />
+              </div>
+
+              <button
+                type="button"
+                className="workspace-frame-btn"
+                onClick={centerFrameWorkspace}
+                title="Frame workspace"
+                aria-label="Frame workspace"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5M8 8l8 8M16 8l-8 8"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.9"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              </button>
+            </>
+          )}
+
+          <button
+            type="button"
+            className="workspace-eye-btn"
+            onClick={() => setCameraPanelCollapsed((current) => !current)}
+            title={showCameraTools ? "Hide zoom tools" : "Show zoom tools"}
+            aria-label={showCameraTools ? "Hide zoom tools" : "Show zoom tools"}
+          >
+            {showCameraTools ? (
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path
-                  d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5M8 8l8 8M16 8l-8 8"
+                  d="M2.5 12s3.4-6 9.5-6 9.5 6 9.5 6-3.4 6-9.5 6-9.5-6-9.5-6z"
                   fill="none"
                   stroke="currentColor"
-                  strokeWidth="1.9"
+                  strokeWidth="1.8"
                   strokeLinecap="round"
                   strokeLinejoin="round"
                 />
+                <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="1.8" />
               </svg>
-            </button>
-          </>
-        )}
-
-        <button
-          type="button"
-          className="workspace-eye-btn"
-          onClick={() => setCameraPanelCollapsed((current) => !current)}
-          title={showCameraTools ? "Hide zoom tools" : "Show zoom tools"}
-          aria-label={showCameraTools ? "Hide zoom tools" : "Show zoom tools"}
-        >
-          {showCameraTools ? (
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                d="M2.5 12s3.4-6 9.5-6 9.5 6 9.5 6-3.4 6-9.5 6-9.5-6-9.5-6z"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="1.8" />
-            </svg>
-          ) : (
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                d="M2.5 12s3.4-6 9.5-6 9.5 6 9.5 6-3.4 6-9.5 6-9.5-6-9.5-6z"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-              <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="1.8" />
-              <line x1="5" y1="19" x2="19" y2="5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-            </svg>
-          )}
-        </button>
+            ) : (
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M2.5 12s3.4-6 9.5-6 9.5 6 9.5 6-3.4 6-9.5 6-9.5-6-9.5-6z"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="1.8" />
+                <line x1="5" y1="19" x2="19" y2="5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              </svg>
+            )}
+          </button>
+        </div>
       </div>
 
       {selectedBumpOutEntity && selectedBumpOutControlScreen && (
@@ -7855,6 +8175,7 @@ export function Workspace() {
       <RectangleModal
         isOpen={rectangleModalState !== null}
         isAtticFloor={isActiveFloorAttic}
+        floorPreset={activeFloorPreset}
         initialValues={rectangleModalState?.initialValues ?? DEFAULT_RECTANGLE_MODAL_VALUES}
         onCancel={() => setRectangleModalState(null)}
         onSubmit={(payload: RectangleModalSubmit) => {

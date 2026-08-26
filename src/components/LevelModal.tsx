@@ -49,6 +49,14 @@ export function LevelModal({
   const [copyEnabled, setCopyEnabled] = useState(true);
   const [copyFromFloorId, setCopyFromFloorId] = useState("");
 
+  const copySourceFloors = useMemo(
+    () =>
+      [...existingFloors].sort(
+        (a, b) => floorPresetRank(a.floorPreset ?? "FIRST_FLOOR") - floorPresetRank(b.floorPreset ?? "FIRST_FLOOR"),
+      ),
+    [existingFloors],
+  );
+
   const getDefaultCopyFromFloorId = (targetPreset: FloorPreset): string => {
     const sortedFloors = [...existingFloors].sort(
       (a, b) => floorPresetRank(a.floorPreset ?? "FIRST_FLOOR") - floorPresetRank(b.floorPreset ?? "FIRST_FLOOR"),
@@ -104,10 +112,11 @@ export function LevelModal({
       return;
     }
 
-    if (copyFromFloorId !== firstExistingFloorId) {
+    const currentSelectionStillValid = copySourceFloors.some((floor) => floor.id === copyFromFloorId);
+    if (!currentSelectionStillValid) {
       setCopyFromFloorId(firstExistingFloorId);
     }
-  }, [copyFromFloorId, existingFloors, isOpen, mode, preset]);
+  }, [copyFromFloorId, copySourceFloors, isOpen, mode, preset]);
 
   const usedPresets = useMemo(() => {
     const next = new Set<FloorPreset>();
@@ -125,19 +134,7 @@ export function LevelModal({
   const canSetUnconditioned = isBasementPreset(preset);
   const isAttic = isAtticPreset(preset);
 
-  const floorOptions = useMemo(
-    () =>
-      FLOOR_PRESET_ORDER.map((floorPreset) => {
-        const floor = existingFloors.find((item) => item.floorPreset === floorPreset);
-        return {
-          preset: floorPreset,
-          floor,
-        };
-      }),
-    [existingFloors],
-  );
-
-  const hasAnyExistingFloors = floorOptions.some((option) => Boolean(option.floor));
+  const hasAnyExistingFloors = copySourceFloors.length > 0;
 
   if (!isOpen) {
     return null;
@@ -200,9 +197,9 @@ export function LevelModal({
                 disabled={!copyEnabled}
                 onChange={(event) => setCopyFromFloorId(event.target.value)}
               >
-                {floorOptions.map(({ preset: optionPreset, floor }) => (
-                  <option key={optionPreset} value={floor?.id ?? ""} disabled={!floor}>
-                    {floor ? floor.name : `${FLOOR_PRESET_LABELS[optionPreset]} (NOT CREATED)`}
+                {copySourceFloors.map((floor) => (
+                  <option key={floor.id} value={floor.id}>
+                    {floor.name}
                   </option>
                 ))}
               </select>

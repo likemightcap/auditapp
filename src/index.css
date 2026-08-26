@@ -812,11 +812,18 @@ select {
   object-fit: contain;
 }
 
-.workspace-camera-controls {
+.workspace-camera-stack {
   position: absolute;
   right: 14px;
   bottom: 14px;
   z-index: 9;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspace-camera-controls {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -830,7 +837,7 @@ select {
 }
 
 .workspace-camera-controls.is-collapsed {
-  gap: 0;
+  gap: 6px;
   padding: 8px;
 }
 
@@ -946,7 +953,9 @@ select {
   cursor: pointer;
 }
 
-.workspace-frame-btn {
+.workspace-frame-btn,
+.workspace-eye-btn,
+.workspace-floorplan-btn {
   width: 36px;
   height: 36px;
   border-radius: 10px;
@@ -961,44 +970,42 @@ select {
   transition: transform 120ms ease, filter 120ms ease;
 }
 
-.workspace-eye-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  border: 1px solid #bfd2ec;
-  background: linear-gradient(180deg, #ffffff 0%, #edf4ff 100%);
-  color: #28508c;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  box-shadow: 0 3px 10px rgba(33, 66, 109, 0.16);
-  transition: transform 120ms ease, filter 120ms ease;
-}
-
-.workspace-eye-btn:hover {
-  transform: translateY(-1px);
-  filter: brightness(1.04);
-}
-
-.workspace-eye-btn:active {
-  transform: translateY(0);
-}
-
-.workspace-eye-btn svg {
+.workspace-floorplan-btn-icon {
   width: 20px;
   height: 20px;
+  display: block;
+  object-fit: contain;
 }
 
-.workspace-frame-btn:hover {
+.workspace-floorplan-btn.is-active {
+  border-color: #b89a3b;
+  background: linear-gradient(180deg, #fff7d6 0%, #f8e7ae 100%);
+  color: #785810;
+}
+
+.workspace-floorplan-btn:disabled {
+  cursor: not-allowed;
+  border-color: #c6d5ea;
+  color: #86a1c3;
+  background: linear-gradient(180deg, #f6f9ff 0%, #e9f0fc 100%);
+  filter: saturate(0.55);
+  opacity: 0.8;
+}
+
+.workspace-eye-btn:hover,
+.workspace-frame-btn:hover,
+.workspace-floorplan-btn:hover:not(:disabled) {
   transform: translateY(-1px);
   filter: brightness(1.04);
 }
 
-.workspace-frame-btn:active {
+.workspace-eye-btn:active,
+.workspace-frame-btn:active,
+.workspace-floorplan-btn:active:not(:disabled) {
   transform: translateY(0);
 }
 
+.workspace-eye-btn svg,
 .workspace-frame-btn svg {
   width: 20px;
   height: 20px;
@@ -1732,11 +1739,15 @@ select {
   }
 
   .workspace-camera-controls {
-    right: 8px;
-    bottom: 8px;
     gap: 6px;
     padding: 7px 6px;
     border-radius: 10px;
+  }
+
+  .workspace-camera-stack {
+    right: 8px;
+    bottom: 8px;
+    gap: 6px;
   }
 
   .workspace-camera-controls.is-collapsed {
@@ -1765,14 +1776,16 @@ select {
   }
 
   .workspace-frame-btn,
-  .workspace-eye-btn {
+  .workspace-eye-btn,
+  .workspace-floorplan-btn {
     width: 28px;
     height: 28px;
     border-radius: 8px;
   }
 
   .workspace-frame-btn svg,
-  .workspace-eye-btn svg {
+  .workspace-eye-btn svg,
+  .workspace-floorplan-btn-icon {
     width: 16px;
     height: 16px;
   }

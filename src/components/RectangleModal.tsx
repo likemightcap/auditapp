@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { FloorPreset } from "../types";
 
 export type CeilingType = "standard" | "cathedral" | "cathedral-horizontal" | "sloped" | "sloped-horizontal" | "none";
 
@@ -19,12 +20,52 @@ export interface RectangleModalInitialValues extends RectangleModalSubmit {}
 interface RectangleModalProps {
   isOpen: boolean;
   isAtticFloor?: boolean;
+  floorPreset?: FloorPreset;
   initialValues: RectangleModalInitialValues;
   onCancel: () => void;
   onSubmit: (payload: RectangleModalSubmit) => void;
 }
 
 const COLORS = ["BLUE", "GREEN", "RED", "YELLOW"] as const;
+const STANDARD_LABEL_OPTIONS = [
+  "",
+  "Main Structure",
+  "Garage",
+  "Addition",
+  "Sunroom",
+  "Bump-Out",
+  "Entry",
+  "Garage (conditioned)",
+  "Custom",
+] as const;
+const BASEMENT_LABEL_OPTIONS = ["Basement", "Crawlspace"] as const;
+const ATTIC_LABEL_OPTIONS = ["Flat", "Slope", "Vault", "Storage Space"] as const;
+
+type RectangleLabelOption = string;
+
+function resolveLabelSelection(
+  initialLabel: string,
+  options: readonly string[],
+): { option: RectangleLabelOption; customLabel: string } {
+  const trimmed = initialLabel.trim();
+  if (!trimmed) {
+    return { option: options[0] ?? "", customLabel: "" };
+  }
+
+  const matched = options.find(
+    (option) => option !== "Custom" && option.toLowerCase() === trimmed.toLowerCase(),
+  );
+
+  if (matched) {
+    return { option: matched, customLabel: "" };
+  }
+
+  if (!options.includes("Custom")) {
+    return { option: options[0] ?? "", customLabel: "" };
+  }
+
+  return { option: "Custom", customLabel: initialLabel };
+}
 
 function normalizeRectangleColor(value: string): string {
   const normalized = String(value).toUpperCase();
@@ -79,6 +120,12 @@ function StepperField({
   value: number;
   onChange: (next: number) => void;
 }) {
+  const [draftValue, setDraftValue] = useState(String(value));
+
+  useEffect(() => {
+    setDraftValue(String(value));
+  }, [value]);
+
   return (
     <div className="stepper">
       <button type="button" onClick={() => adjustValue(onChange, value, -1)}>
@@ -88,8 +135,33 @@ function StepperField({
         type="number"
         min={1}
         step={1}
-        value={value}
-        onChange={(event) => onChange(clampToPositiveInt(Number(event.target.value)))}
+        value={draftValue}
+        onChange={(event) => {
+          const raw = event.target.value;
+          setDraftValue(raw);
+          if (raw.trim() === "") {
+            return;
+          }
+          const parsed = Number(raw);
+          if (!Number.isFinite(parsed)) {
+            return;
+          }
+          onChange(clampToPositiveInt(parsed));
+        }}
+        onBlur={() => {
+          if (draftValue.trim() === "") {
+            setDraftValue(String(value));
+            return;
+          }
+          const parsed = Number(draftValue);
+          if (!Number.isFinite(parsed)) {
+            setDraftValue(String(value));
+            return;
+          }
+          const normalized = clampToPositiveInt(parsed);
+          onChange(normalized);
+          setDraftValue(String(normalized));
+        }}
       />
       <span className="unit">'</span>
       <button type="button" onClick={() => adjustValue(onChange, value, 1)}>
@@ -99,8 +171,24 @@ function StepperField({
   );
 }
 
-export function RectangleModal({ isOpen, isAtticFloor = false, initialValues, onCancel, onSubmit }: RectangleModalProps) {
-  const [label, setLabel] = useState("");
+export function RectangleModal({
+  isOpen,
+  isAtticFloor = false,
+  floorPreset,
+  initialValues,
+  onCancel,
+  onSubmit,
+}: RectangleModalProps) {
+  const isBasementFloor = floorPreset === "BASEMENT_CRAWLSPACE";
+  const labelOptions = isAtticFloor
+    ? ATTIC_LABEL_OPTIONS
+    : isBasementFloor
+      ? BASEMENT_LABEL_OPTIONS
+      : STANDARD_LABEL_OPTIONS;
+  const supportsCustomLabel = labelOptions.some((option) => option === "Custom");
+
+  const [labelOption, setLabelOption] = useState<RectangleLabelOption>("");
+  const [customLabel, setCustomLabel] = useState("");
   const [color, setColor] = useState("BLUE");
   const [widthFt, setWidthFt] = useState(12);
   const [heightFt, setHeightFt] = useState(12);
@@ -110,13 +198,15 @@ export function RectangleModal({ isOpen, isAtticFloor = false, initialValues, on
   const [lowHeightFt, setLowHeightFt] = useState(8);
   const [highHeightFt, setHighHeightFt] = useState(12);
   const [colorManuallySet, setColorManuallySet] = useState(false);
-  const labelInputRef = useRef<HTMLInputElement | null>(null);
+  const customLabelInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (!isOpen) {
       return;
     }
-    setLabel(initialValues.label ?? "");
+    const resolvedLabel = resolveLabelSelection(initialValues.label ?? "", labelOptions);
+    setLabelOption(resolvedLabel.option);
+    setCustomLabel(resolvedLabel.customLabel);
     setColor(normalizeRectangleColor(initialValues.color));
     setWidthFt(clampToPositiveInt(initialValues.widthFt));
     setHeightFt(clampToPositiveInt(initialValues.heightFt));
@@ -134,17 +224,17 @@ export function RectangleModal({ isOpen, isAtticFloor = false, initialValues, on
       setLowHeightFt(8);
       setHighHeightFt(12);
     }
-  }, [initialValues, isAtticFloor, isOpen]);
+  }, [initialValues, isAtticFloor, isOpen, labelOptions]);
 
   useEffect(() => {
-    if (!isOpen) {
+    if (!isOpen || !supportsCustomLabel || labelOption !== "Custom") {
       return;
     }
     requestAnimationFrame(() => {
-      labelInputRef.current?.focus();
-      labelInputRef.current?.select();
+      customLabelInputRef.current?.focus();
+      customLabelInputRef.current?.select();
     });
-  }, [isOpen]);
+  }, [isOpen, labelOption, supportsCustomLabel]);
 
   const canSubmit = useMemo(() => {
     if (widthFt < 1 || heightFt < 1) {
@@ -186,15 +276,61 @@ export function RectangleModal({ isOpen, isAtticFloor = false, initialValues, on
 
         <div className="modal-row">
           <label>LABEL:</label>
-          <input
-            ref={labelInputRef}
-            type="text"
-            value={label}
-            onChange={(event) => setLabel(event.target.value)}
-            placeholder="Optional"
-            autoFocus
-          />
+          <select
+            value={labelOption}
+            onChange={(event) => {
+              const nextOption = event.target.value as RectangleLabelOption;
+              setLabelOption(nextOption);
+              if (!supportsCustomLabel || nextOption !== "Custom") {
+                setCustomLabel("");
+              }
+
+              if (nextOption === "Garage" || nextOption === "Sunroom") {
+                setUnconditioned(true);
+                setColor("RED");
+                setColorManuallySet(false);
+              }
+
+              if (isAtticFloor) {
+                if (nextOption === "Slope" || nextOption === "Vault") {
+                  setColor("YELLOW");
+                  setColorManuallySet(false);
+                } else if (nextOption === "Storage Space") {
+                  setColor("BLUE");
+                  setColorManuallySet(false);
+                } else if (nextOption === "Flat") {
+                  setColor("RED");
+                  setColorManuallySet(false);
+                }
+              }
+
+              if (isBasementFloor && nextOption === "Crawlspace") {
+                setColor("YELLOW");
+                setColorManuallySet(false);
+              }
+            }}
+          >
+            {labelOptions.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
         </div>
+
+        {supportsCustomLabel && labelOption === "Custom" && (
+          <div className="modal-row">
+            <label>CUSTOM LABEL:</label>
+            <input
+              ref={customLabelInputRef}
+              type="text"
+              value={customLabel}
+              onChange={(event) => setCustomLabel(event.target.value)}
+              placeholder="Type custom label"
+              autoFocus
+            />
+          </div>
+        )}
 
         <div className="modal-row">
           <label>COLOR:</label>
@@ -230,27 +366,29 @@ export function RectangleModal({ isOpen, isAtticFloor = false, initialValues, on
           <StepperField value={heightFt} onChange={setHeightFt} />
         </div>
 
+        {!isAtticFloor && !isBasementFloor && (
+          <div className="modal-row">
+            <label>UNCONDITIONED:</label>
+            <label className="modal-checkbox rect-unconditioned-checkbox" htmlFor="rectUnconditioned">
+              <input
+                id="rectUnconditioned"
+                type="checkbox"
+                checked={unconditioned}
+                onChange={(event) => {
+                  const nextUnconditioned = event.target.checked;
+                  setUnconditioned(nextUnconditioned);
+                  if (!colorManuallySet) {
+                    setColor(defaultRectangleColorForOptions(nextUnconditioned, ceilingType));
+                  }
+                }}
+              />
+              <span>Exclude from area and volume</span>
+            </label>
+          </div>
+        )}
+
         {!isAtticFloor && (
           <>
-            <div className="modal-row">
-              <label>UNCONDITIONED:</label>
-              <label className="modal-checkbox rect-unconditioned-checkbox" htmlFor="rectUnconditioned">
-                <input
-                  id="rectUnconditioned"
-                  type="checkbox"
-                  checked={unconditioned}
-                  onChange={(event) => {
-                    const nextUnconditioned = event.target.checked;
-                    setUnconditioned(nextUnconditioned);
-                    if (!colorManuallySet) {
-                      setColor(defaultRectangleColorForOptions(nextUnconditioned, ceilingType));
-                    }
-                  }}
-                />
-                <span>Exclude from area and volume</span>
-              </label>
-            </div>
-
             <div className="modal-row ceiling-row">
               <label>CEILING TYPE:</label>
               <select
@@ -299,7 +437,7 @@ export function RectangleModal({ isOpen, isAtticFloor = false, initialValues, on
             disabled={!canSubmit}
             onClick={() =>
               onSubmit({
-                label,
+                label: supportsCustomLabel && labelOption === "Custom" ? customLabel.trim() : labelOption,
                 color,
                 widthFt,
                 heightFt,
