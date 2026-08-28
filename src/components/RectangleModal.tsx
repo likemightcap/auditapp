@@ -21,6 +21,7 @@ interface RectangleModalProps {
   isOpen: boolean;
   isAtticFloor?: boolean;
   floorPreset?: FloorPreset;
+  floorUnconditioned?: boolean;
   initialValues: RectangleModalInitialValues;
   onCancel: () => void;
   onSubmit: (payload: RectangleModalSubmit) => void;
@@ -176,6 +177,7 @@ export function RectangleModal({
   isOpen,
   isAtticFloor = false,
   floorPreset,
+  floorUnconditioned = false,
   initialValues,
   onCancel,
   onSubmit,
@@ -200,7 +202,10 @@ export function RectangleModal({
   const [highHeightFt, setHighHeightFt] = useState(12);
   const [colorManuallySet, setColorManuallySet] = useState(false);
   const customLabelInputRef = useRef<HTMLInputElement | null>(null);
+  const isBasementCrawlspace = isBasementFloor && labelOption === "Crawlspace";
   const isBasementSlab = isBasementFloor && labelOption === "Slab";
+  const showBasementCrawlspaceUnconditioned = isBasementCrawlspace && !floorUnconditioned;
+  const effectiveUnconditioned = isAtticFloor ? false : isBasementSlab ? true : unconditioned;
   const effectiveCeilingType: CeilingType = isBasementSlab ? "none" : ceilingType;
 
   useEffect(() => {
@@ -318,6 +323,11 @@ export function RectangleModal({
                 setColor("RED");
                 setColorManuallySet(false);
                 setCeilingType("none");
+                setUnconditioned(true);
+              }
+
+              if (isBasementFloor && nextOption === "Basement") {
+                setUnconditioned(false);
               }
             }}
           >
@@ -377,7 +387,7 @@ export function RectangleModal({
           <StepperField value={heightFt} onChange={setHeightFt} />
         </div>
 
-        {!isAtticFloor && !isBasementFloor && (
+        {!isAtticFloor && (!isBasementFloor || showBasementCrawlspaceUnconditioned) && (
           <div className="modal-row">
             <label>UNCONDITIONED:</label>
             <label className="modal-checkbox rect-unconditioned-checkbox" htmlFor="rectUnconditioned">
@@ -388,7 +398,7 @@ export function RectangleModal({
                 onChange={(event) => {
                   const nextUnconditioned = event.target.checked;
                   setUnconditioned(nextUnconditioned);
-                  if (!colorManuallySet) {
+                  if (!colorManuallySet && !isBasementFloor) {
                     setColor(defaultRectangleColorForOptions(nextUnconditioned, ceilingType));
                   }
                 }}
@@ -456,7 +466,7 @@ export function RectangleModal({
                 color,
                 widthFt,
                 heightFt,
-                unconditioned: isAtticFloor ? false : unconditioned,
+                unconditioned: effectiveUnconditioned,
                 ceilingType: isAtticFloor ? "standard" : effectiveCeilingType,
                 standardHeightFt: isAtticFloor ? 8 : standardHeightFt,
                 highHeightFt: isAtticFloor ? 12 : highHeightFt,

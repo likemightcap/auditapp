@@ -3686,12 +3686,62 @@ export function Workspace() {
     startZoom: 0,
     anchorWorld: { x: 0, y: 0 },
   });
+  const cameraUpdateFrameRef = useRef<number | null>(null);
+  const pendingPanDeltaRef = useRef<Point>({ x: 0, y: 0 });
+  const pendingSetCameraRef = useRef<{ x: number; y: number; zoom: number } | null>(null);
   const interactionRef = useRef<InteractionState>({
     type: "none",
     pointerId: null,
     startScreen: { x: 0, y: 0 },
     startWorld: { x: 0, y: 0 },
   });
+
+  const flushQueuedCameraUpdate = () => {
+    cameraUpdateFrameRef.current = null;
+
+    if (pendingSetCameraRef.current) {
+      const nextCamera = pendingSetCameraRef.current;
+      pendingSetCameraRef.current = null;
+      pendingPanDeltaRef.current = { x: 0, y: 0 };
+      dispatch({ type: "SET_CAMERA", camera: nextCamera });
+      return;
+    }
+
+    const pan = pendingPanDeltaRef.current;
+    if (pan.x !== 0 || pan.y !== 0) {
+      pendingPanDeltaRef.current = { x: 0, y: 0 };
+      dispatch({ type: "PAN_CAMERA", dx: pan.x, dy: pan.y });
+    }
+  };
+
+  const scheduleCameraUpdate = () => {
+    if (cameraUpdateFrameRef.current !== null) {
+      return;
+    }
+    cameraUpdateFrameRef.current = window.requestAnimationFrame(flushQueuedCameraUpdate);
+  };
+
+  const queuePanCamera = (dx: number, dy: number) => {
+    pendingPanDeltaRef.current = {
+      x: pendingPanDeltaRef.current.x + dx,
+      y: pendingPanDeltaRef.current.y + dy,
+    };
+    scheduleCameraUpdate();
+  };
+
+  const queueSetCamera = (camera: { x: number; y: number; zoom: number }) => {
+    pendingSetCameraRef.current = camera;
+    pendingPanDeltaRef.current = { x: 0, y: 0 };
+    scheduleCameraUpdate();
+  };
+
+  useEffect(() => {
+    return () => {
+      if (cameraUpdateFrameRef.current !== null) {
+        window.cancelAnimationFrame(cameraUpdateFrameRef.current);
+      }
+    };
+  }, []);
 
   const pointById = useMemo(() => new Map(floor.wallPoints.map((point) => [point.id, point])), [floor.wallPoints]);
   const rectangleEntities = useMemo(
@@ -4305,13 +4355,10 @@ export function Workspace() {
     const nextCameraX = midpointScreen.x - pinchGestureRef.current.anchorWorld.x * nextZoom;
     const nextCameraY = midpointScreen.y - pinchGestureRef.current.anchorWorld.y * nextZoom;
 
-    dispatch({
-      type: "SET_CAMERA",
-      camera: {
-        x: nextCameraX,
-        y: nextCameraY,
-        zoom: nextZoom,
-      },
+    queueSetCamera({
+      x: nextCameraX,
+      y: nextCameraY,
+      zoom: nextZoom,
     });
     return true;
   };
@@ -4612,6 +4659,21 @@ export function Workspace() {
       }
     }
 
+    const interaction = interactionRef.current;
+
+    if (interaction.type === "pan") {
+      if (!interaction.dragStarted) {
+        const movedX = event.clientX - interaction.startScreen.x;
+        const movedY = event.clientY - interaction.startScreen.y;
+        if (Math.hypot(movedX, movedY) <= getDragThresholdPx(interaction.pointerType)) {
+          return;
+        }
+        interactionRef.current = { ...interaction, dragStarted: true };
+      }
+      queuePanCamera(event.movementX, event.movementY);
+      return;
+    }
+
     if (event.pointerType === "touch" && touchPointsRef.current.has(event.pointerId)) {
       touchPointsRef.current.set(event.pointerId, getTouchScreenPoint(event));
       if (maybeApplyPinchGesture()) {
@@ -4625,8 +4687,6 @@ export function Workspace() {
     if (rect) {
       setPointerScreen({ x: event.clientX - rect.left, y: event.clientY - rect.top });
     }
-    const interaction = interactionRef.current;
-
     if ((state.activeTool === "door" || state.activeTool === "window" || state.activeTool === "bumpout") && interaction.type === "none") {
       const previewCandidate =
         state.activeTool === "door"
@@ -4690,19 +4750,6 @@ export function Workspace() {
     }
 
     if (interaction.type === "none") {
-      return;
-    }
-
-    if (interaction.type === "pan") {
-      if (!interaction.dragStarted) {
-        const movedX = event.clientX - interaction.startScreen.x;
-        const movedY = event.clientY - interaction.startScreen.y;
-        if (Math.hypot(movedX, movedY) <= getDragThresholdPx(interaction.pointerType)) {
-          return;
-        }
-        interactionRef.current = { ...interaction, dragStarted: true };
-      }
-      dispatch({ type: "PAN_CAMERA", dx: event.movementX, dy: event.movementY });
       return;
     }
 
@@ -8710,6 +8757,7 @@ export function Workspace() {
         isOpen={rectangleModalState !== null}
         isAtticFloor={isActiveFloorAttic}
         floorPreset={activeFloorPreset}
+        floorUnconditioned={Boolean(floor.unconditioned)}
         initialValues={rectangleModalState?.initialValues ?? DEFAULT_RECTANGLE_MODAL_VALUES}
         onCancel={() => setRectangleModalState(null)}
         onSubmit={(payload: RectangleModalSubmit) => {
