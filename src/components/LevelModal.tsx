@@ -22,7 +22,6 @@ interface LevelModalProps {
   editingFloorId?: string;
   existingFloors: FloorData[];
   initialPreset: FloorPreset;
-  initialName: string;
   initialUnconditioned: boolean;
   showDelete: boolean;
   onCancel: () => void;
@@ -43,7 +42,6 @@ export function LevelModal({
   onSubmit,
   onDelete,
 }: LevelModalProps) {
-  const [name, setName] = useState("");
   const [preset, setPreset] = useState<FloorPreset>("FIRST_FLOOR");
   const [unconditioned, setUnconditioned] = useState(false);
   const [copyEnabled, setCopyEnabled] = useState(true);
@@ -90,7 +88,6 @@ export function LevelModal({
     if (!isOpen) {
       return;
     }
-    setName("");
     setPreset(initialPreset);
     setUnconditioned(initialUnconditioned);
 
@@ -141,7 +138,7 @@ export function LevelModal({
   }
 
   const payload: LevelModalSubmit = {
-    name: name.trim().length > 0 ? name.trim() : FLOOR_PRESET_LABELS[preset],
+    name: FLOOR_PRESET_LABELS[preset],
     floorPreset: preset,
     unconditioned: isAttic ? true : canSetUnconditioned ? unconditioned : false,
     copyFromFloorId: mode === "create" && copyEnabled ? copyFromFloorId || undefined : undefined,
@@ -167,16 +164,6 @@ export function LevelModal({
               </option>
             ))}
           </select>
-        </div>
-
-        <div className="modal-row">
-          <label>CUSTOM NAME:</label>
-          <input
-            type="text"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="Custom floor name"
-          />
         </div>
 
         {mode === "create" && hasAnyExistingFloors && (

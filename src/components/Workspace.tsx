@@ -1968,6 +1968,15 @@ function isUnconditionedRectangle(entity: MapEntity): boolean {
   return entity.type === "rectangle" && Boolean(entity.metadata.unconditioned);
 }
 
+function isAtticStorageSpaceRectangle(entity: MapEntity, isActiveFloorAttic: boolean): boolean {
+  return (
+    isActiveFloorAttic &&
+    entity.type === "rectangle" &&
+    !isBumpOutRectangle(entity) &&
+    String(entity.label ?? "").trim().toUpperCase() === "STORAGE SPACE"
+  );
+}
+
 function containsPoint(rect: RectBounds, x: number, y: number): boolean {
   return x >= rect.x && x <= rect.x + rect.width && y >= rect.y && y <= rect.y + rect.height;
 }
@@ -2000,6 +2009,114 @@ function getCellsOutsideDuplicateConditionedBaseline(
   return cells;
 }
 
+function getCellsInsideDuplicateConditionedBaseline(
+  rect: RectBounds,
+  baseline: Array<{ x: number; y: number; width: number; height: number }>,
+): RectBounds[] {
+  const minX = Math.floor(rect.x);
+  const minY = Math.floor(rect.y);
+  const maxX = Math.ceil(rect.x + rect.width);
+  const maxY = Math.ceil(rect.y + rect.height);
+  const cells: RectBounds[] = [];
+
+  for (let y = minY; y < maxY; y += 1) {
+    for (let x = minX; x < maxX; x += 1) {
+      const centerX = x + 0.5;
+      const centerY = y + 0.5;
+      if (!containsPoint(rect, centerX, centerY)) {
+        continue;
+      }
+
+      const coveredByBaseline = baseline.some((baselineRect) => containsPoint(baselineRect, centerX, centerY));
+      if (coveredByBaseline) {
+        cells.push({ x, y, width: 1, height: 1 });
+      }
+    }
+  }
+
+  return cells;
+}
+
+function getBumpOutCellsByBaselineMode(
+  entity: MapEntity,
+  baseline: Array<{ x: number; y: number; width: number; height: number }>,
+  mode: DuplicateConditionedBaselineMode,
+): RectBounds[] {
+  const worldPoints = getBumpOutWorldPoints(entity);
+  if (worldPoints.length < 3) {
+    return [];
+  }
+
+  const cellIntersectsPolygon = (cellX: number, cellY: number, polygon: Point[]): boolean => {
+    const cell = { x: cellX, y: cellY, width: 1, height: 1 };
+    const corners: Point[] = [
+      { x: cellX, y: cellY },
+      { x: cellX + 1, y: cellY },
+      { x: cellX + 1, y: cellY + 1 },
+      { x: cellX, y: cellY + 1 },
+    ];
+
+    if (corners.some((corner) => pointInPolygonInclusive(corner, polygon))) {
+      return true;
+    }
+
+    if (polygon.some((point) => containsPoint(cell, point.x, point.y))) {
+      return true;
+    }
+
+    const cellEdges: Array<[Point, Point]> = [
+      [corners[0], corners[1]],
+      [corners[1], corners[2]],
+      [corners[2], corners[3]],
+      [corners[3], corners[0]],
+    ];
+
+    for (let index = 0; index < polygon.length; index += 1) {
+      const start = polygon[index];
+      const end = polygon[(index + 1) % polygon.length];
+      for (const [edgeStart, edgeEnd] of cellEdges) {
+        if (segmentsIntersectInclusive(start, end, edgeStart, edgeEnd)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  };
+
+  const minX = Math.floor(Math.min(...worldPoints.map((point) => point.x)));
+  const minY = Math.floor(Math.min(...worldPoints.map((point) => point.y)));
+  const maxX = Math.ceil(Math.max(...worldPoints.map((point) => point.x)));
+  const maxY = Math.ceil(Math.max(...worldPoints.map((point) => point.y)));
+  const cells: RectBounds[] = [];
+
+  for (let y = minY; y < maxY; y += 1) {
+    for (let x = minX; x < maxX; x += 1) {
+      if (!cellIntersectsPolygon(x, y, worldPoints)) {
+        continue;
+      }
+
+      const centerX = x + 0.5;
+      const centerY = y + 0.5;
+
+      const coveredByBaseline = baseline.some((baselineRect) => containsPoint(baselineRect, centerX, centerY));
+      if ((mode === "outside-baseline" && !coveredByBaseline) || (mode === "inside-baseline" && coveredByBaseline)) {
+        cells.push({ x, y, width: 1, height: 1 });
+      }
+    }
+  }
+
+  return cells;
+}
+
+type DuplicateConditionedBaselineMode = "outside-baseline" | "inside-baseline";
+
+interface DuplicateConditionedBaselineState {
+  baseline: Array<{ x: number; y: number; width: number; height: number }>;
+  mode: DuplicateConditionedBaselineMode;
+  unconditionedLabelBaseline: Array<{ x: number; y: number; width: number; height: number }>;
+}
+
 interface OverflowOutlineSegment {
   x1: number;
   y1: number;
@@ -2019,6 +2136,13 @@ interface DuplicateOverflowRegion {
   maxX: number;
   maxY: number;
   outline: OverflowOutlineSegment[];
+}
+
+type OverflowRegionLabel = "OVER UNCONDITIONED SPACE" | "OVERHANG";
+
+interface LabeledDuplicateOverflowRegion {
+  label: OverflowRegionLabel;
+  region: DuplicateOverflowRegion;
 }
 
 function buildOverflowOutlineLoops(outline: OverflowOutlineSegment[]): OverflowOutlinePoint[][] {
@@ -2178,6 +2302,42 @@ function buildDuplicateOverflowRegions(cells: RectBounds[]): DuplicateOverflowRe
   }
 
   return regions;
+}
+
+function buildLabeledDuplicateOverflowRegions(
+  cells: RectBounds[],
+  unconditionedLabelBaseline: Array<{ x: number; y: number; width: number; height: number }>,
+): LabeledDuplicateOverflowRegion[] {
+  if (cells.length === 0) {
+    return [];
+  }
+
+  const overUnconditionedCells: RectBounds[] = [];
+  const overhangCells: RectBounds[] = [];
+
+  for (const cell of cells) {
+    const centerX = cell.x + cell.width / 2;
+    const centerY = cell.y + cell.height / 2;
+    const overMarkedUnconditioned = unconditionedLabelBaseline.some((baselineRect) =>
+      containsPoint(baselineRect, centerX, centerY),
+    );
+
+    if (overMarkedUnconditioned) {
+      overUnconditionedCells.push(cell);
+    } else {
+      overhangCells.push(cell);
+    }
+  }
+
+  const labeled: LabeledDuplicateOverflowRegion[] = [];
+  for (const region of buildDuplicateOverflowRegions(overUnconditionedCells)) {
+    labeled.push({ label: "OVER UNCONDITIONED SPACE", region });
+  }
+  for (const region of buildDuplicateOverflowRegions(overhangCells)) {
+    labeled.push({ label: "OVERHANG", region });
+  }
+
+  return labeled;
 }
 
 function getRectangleCeilingSignature(entity: MapEntity): string {
@@ -3860,20 +4020,37 @@ export function Workspace() {
   };
 
   const openCreateRectangleModal = (anchor: Point) => {
-    const initialValues: RectangleModalInitialValues =
-      activeFloorPreset === "ATTIC"
-        ? {
-            ...DEFAULT_RECTANGLE_MODAL_VALUES,
-            label: "FLAT",
-            color: "RED",
-          }
-        : activeFloorPreset === "BASEMENT_CRAWLSPACE"
-          ? {
-              ...DEFAULT_RECTANGLE_MODAL_VALUES,
-              label: "BASEMENT",
-              color: floor.unconditioned ? "RED" : "BLUE",
-            }
-          : DEFAULT_RECTANGLE_MODAL_VALUES;
+    const getNewRectangleDefaultsForActiveFloor = (): RectangleModalInitialValues => {
+      if (activeFloorPreset === "ATTIC") {
+        return {
+          ...DEFAULT_RECTANGLE_MODAL_VALUES,
+          label: "FLAT",
+          color: "RED",
+          unconditioned: false,
+          ceilingType: "standard",
+          standardHeightFt: 8,
+          lowHeightFt: 8,
+          highHeightFt: 12,
+        };
+      }
+
+      if (activeFloorPreset === "BASEMENT_CRAWLSPACE") {
+        return {
+          ...DEFAULT_RECTANGLE_MODAL_VALUES,
+          label: "BASEMENT",
+          color: floor.unconditioned ? "RED" : "BLUE",
+          unconditioned: false,
+          ceilingType: "standard",
+          standardHeightFt: 8,
+          lowHeightFt: 8,
+          highHeightFt: 12,
+        };
+      }
+
+      return DEFAULT_RECTANGLE_MODAL_VALUES;
+    };
+
+    const initialValues: RectangleModalInitialValues = getNewRectangleDefaultsForActiveFloor();
 
     setRectangleModalState({
       mode: "create",
@@ -4212,6 +4389,46 @@ export function Workspace() {
         ? { x: Math.round(nearestEdge.x), y: Math.round(nearestEdge.y) }
         : snapRectangleStartToNearbyEdge(baseStart, drawStartRectangles);
       const nextEntity = createEntityFromTool("rectangle", snappedStart.x, snappedStart.y);
+      const rectangleDefaults =
+        activeFloorPreset === "ATTIC"
+          ? {
+              label: "FLAT",
+              color: "RED",
+              unconditioned: false,
+              ceilingType: "standard" as const,
+              standardHeightFt: 8,
+              lowHeightFt: 8,
+              highHeightFt: 12,
+            }
+          : activeFloorPreset === "BASEMENT_CRAWLSPACE"
+            ? {
+                label: "BASEMENT",
+                color: floor.unconditioned ? "RED" : "BLUE",
+                unconditioned: false,
+                ceilingType: "standard" as const,
+                standardHeightFt: 8,
+                lowHeightFt: 8,
+                highHeightFt: 12,
+              }
+            : {
+                label: "",
+                color: "BLUE",
+                unconditioned: false,
+                ceilingType: "standard" as const,
+                standardHeightFt: 8,
+                lowHeightFt: 8,
+                highHeightFt: 12,
+              };
+      nextEntity.label = rectangleDefaults.label;
+      nextEntity.metadata = {
+        ...nextEntity.metadata,
+        color: rectangleDefaults.color,
+        unconditioned: rectangleDefaults.unconditioned,
+        ceilingType: rectangleDefaults.ceilingType,
+        standardHeightFt: rectangleDefaults.standardHeightFt,
+        lowHeightFt: rectangleDefaults.lowHeightFt,
+        highHeightFt: rectangleDefaults.highHeightFt,
+      };
       nextEntity.width = 1;
       nextEntity.height = 1;
 
@@ -4628,11 +4845,14 @@ export function Workspace() {
           y: interaction.entitySnapshot.y + dy,
         });
         const sourceRect = rectBoundsFromEntity(interaction.entitySnapshot);
-        const snapEnabled = !isRectangleConnectedToAny(
-          sourceRect,
-          rectangleEntities,
-          interaction.entitySnapshot.id,
-        );
+        const isStorageSpaceRect = isAtticStorageSpaceRectangle(interaction.entitySnapshot, isActiveFloorAttic);
+        const snapEnabled =
+          !isStorageSpaceRect &&
+          !isRectangleConnectedToAny(
+            sourceRect,
+            rectangleEntities,
+            interaction.entitySnapshot.id,
+          );
         const movedRect = snapEnabled
           ? snapRectTranslationToNearbyEdges(
               {
@@ -4722,6 +4942,7 @@ export function Workspace() {
       }
       const snapEnabled =
         interaction.entitySnapshot.type === "rectangle" &&
+        !isAtticStorageSpaceRectangle(interaction.entitySnapshot, isActiveFloorAttic) &&
         !isRectangleConnectedToAny(sourceRect, rectangleEntities, interaction.entitySnapshot.id);
       const nextRect =
         isBumpOutResize
@@ -6120,9 +6341,32 @@ export function Workspace() {
     }
   }, [canShowSupportingFloorplan, showSupportingFloorplan]);
 
-  const duplicateConditionedBaseline = useMemo(() => {
+  const duplicateConditionedBaseline = useMemo<DuplicateConditionedBaselineState | null>(() => {
     if (isActiveFloorFirst) {
-      return null;
+      const orderedFloors = sortFloorsByPresetOrder(state.project.floors);
+      const basementFloor =
+        orderedFloors.find((candidate) => {
+          const candidatePreset = candidate.floorPreset ?? inferFloorPresetFromName(candidate.name);
+          return isBasementPreset(candidatePreset);
+        }) ?? null;
+
+      if (!basementFloor) {
+        return null;
+      }
+
+      const baseline = basementFloor.entities
+        .filter((entity) => entity.type === "rectangle")
+        .map((entity) => rectBoundsFromEntity(entity));
+
+      if (baseline.length === 0) {
+        return null;
+      }
+
+      return {
+        baseline,
+        mode: "outside-baseline",
+        unconditionedLabelBaseline: [],
+      };
     }
 
     const orderedFloors = sortFloorsByPresetOrder(state.project.floors);
@@ -6136,10 +6380,175 @@ export function Workspace() {
       return null;
     }
 
-    return supportingFloor.entities
+    if (isActiveFloorAttic) {
+      const baseline = supportingFloor.entities
+        .filter((entity) => entity.type === "rectangle" && Boolean(entity.metadata.unconditioned))
+        .map((entity) => rectBoundsFromEntity(entity));
+
+      if (baseline.length === 0) {
+        return null;
+      }
+
+      return {
+        baseline,
+        mode: "inside-baseline",
+        unconditionedLabelBaseline: baseline,
+      };
+    }
+
+    const baseline = supportingFloor.entities
       .filter((entity) => entity.type === "rectangle" && !Boolean(entity.metadata.unconditioned))
       .map((entity) => rectBoundsFromEntity(entity));
-  }, [floor.id, isActiveFloorFirst, state.project.floors]);
+    const unconditionedLabelBaseline = supportingFloor.entities
+      .filter((entity) => entity.type === "rectangle" && Boolean(entity.metadata.unconditioned))
+      .map((entity) => rectBoundsFromEntity(entity));
+
+    if (baseline.length === 0) {
+      return null;
+    }
+
+    return {
+      baseline,
+      mode: "outside-baseline",
+      unconditionedLabelBaseline,
+    };
+  }, [floor.id, isActiveFloorAttic, isActiveFloorFirst, state.project.floors]);
+
+  const selectedEntityForTopHighlight = (() => {
+    const selection = state.selection;
+    if (selection.kind !== "entity") {
+      return null;
+    }
+    return displayEntities.find((entity) => entity.id === selection.id) ?? null;
+  })();
+
+  const renderTopSelectionHighlight = (entity: MapEntity): ReactElement | null => {
+    const stroke = "#ffe59a";
+
+    if (entity.type === "text") {
+      const bounds = getTextBounds(entity.label, getTextSize(entity));
+      return (
+        <rect
+          x={bounds.selectionX}
+          y={bounds.selectionY}
+          width={bounds.selectionWidth}
+          height={bounds.selectionHeight}
+          fill="transparent"
+          stroke={stroke}
+          strokeWidth={0.16}
+          rx={0.1}
+        />
+      );
+    }
+
+    if (entity.type === "rectangle") {
+      if (isBumpOutRectangle(entity)) {
+        return (
+          <path
+            d={`${bumpOutPath(getBumpOutRenderPoints(entity))} Z`}
+            fill="none"
+            stroke={stroke}
+            strokeWidth={0.28}
+            strokeLinejoin="round"
+          />
+        );
+      }
+
+      return (
+        <rect
+          x={0}
+          y={0}
+          width={Math.max(entity.width, 0.4)}
+          height={Math.max(entity.height, 0.4)}
+          rx={0.1}
+          fill="transparent"
+          stroke={stroke}
+          strokeWidth={0.28}
+        />
+      );
+    }
+
+    if (entity.type === "window") {
+      return (
+        <rect
+          x={-entity.width / 2 - WINDOW_SELECTION_PADDING}
+          y={-WINDOW_FILL_THICKNESS / 2 - WINDOW_SELECTION_PADDING}
+          width={entity.width + WINDOW_SELECTION_PADDING * 2}
+          height={WINDOW_FILL_THICKNESS + WINDOW_SELECTION_PADDING * 2}
+          fill="transparent"
+          stroke={stroke}
+          strokeWidth={0.2}
+          rx={0.14}
+        />
+      );
+    }
+
+    if (entity.type === "door") {
+      const doorVisualWidth = Math.max(1, getDoorVisualWidth(entity));
+      const doorKind = getDoorKind(entity);
+      if (doorKind === "sliding") {
+        return (
+          <rect
+            x={-doorVisualWidth / 2 - WINDOW_SELECTION_PADDING}
+            y={-WINDOW_FILL_THICKNESS / 2 - WINDOW_SELECTION_PADDING}
+            width={doorVisualWidth + WINDOW_SELECTION_PADDING * 2}
+            height={WINDOW_FILL_THICKNESS + WINDOW_SELECTION_PADDING * 2}
+            fill="transparent"
+            stroke={stroke}
+            strokeWidth={0.2}
+            rx={0.14}
+          />
+        );
+      }
+
+      const flipSign = Boolean(entity.metadata.flipped) ? -1 : 1;
+      return (
+        <rect
+          x={-doorVisualWidth / 2 - 0.2}
+          y={(flipSign === 1 ? 0 : -doorVisualWidth) - 0.2}
+          width={doorVisualWidth + 0.4}
+          height={doorVisualWidth + 0.4}
+          fill="transparent"
+          stroke={stroke}
+          strokeWidth={0.2}
+          rx={0.14}
+        />
+      );
+    }
+
+    if (entity.type === "line") {
+      const pad = 0.24;
+      const minX = Math.min(0, entity.width) - pad;
+      const minY = Math.min(0, entity.height) - pad;
+      const maxX = Math.max(0, entity.width) + pad;
+      const maxY = Math.max(0, entity.height) + pad;
+      return (
+        <rect
+          x={minX}
+          y={minY}
+          width={Math.max(0.4, maxX - minX)}
+          height={Math.max(0.4, maxY - minY)}
+          fill="transparent"
+          stroke={stroke}
+          strokeWidth={0.2}
+          rx={0.14}
+        />
+      );
+    }
+
+    return (
+      <rect
+        x={-entity.width / 2 - 0.2}
+        y={-entity.height / 2 - 0.2}
+        width={Math.max(entity.width, 0.4) + 0.4}
+        height={Math.max(entity.height, 0.4) + 0.4}
+        fill="transparent"
+        stroke={stroke}
+        strokeWidth={0.2}
+        rx={0.14}
+      />
+    );
+  };
   const hideLinearMarkers =
     interactionRef.current.type === "draw-rect" ||
     (interactionRef.current.type === "resize-rect" && interactionRef.current.entitySnapshot?.type === "rectangle") ||
@@ -7096,6 +7505,19 @@ export function Workspace() {
                       const path = bumpOutPath(points);
                       const hostEdge = (entity.metadata.hostEdge as RectEdge | undefined) ?? "top";
                       const isUnconditioned = Boolean(entity.metadata.unconditioned);
+                      const duplicateOverflowCells =
+                        duplicateConditionedBaseline && !isUnconditioned
+                          ? getBumpOutCellsByBaselineMode(
+                              entity,
+                              duplicateConditionedBaseline.baseline,
+                              duplicateConditionedBaseline.mode,
+                            )
+                          : [];
+                      const labeledDuplicateOverflowRegions = buildLabeledDuplicateOverflowRegions(
+                        duplicateOverflowCells,
+                        duplicateConditionedBaseline?.unconditionedLabelBaseline ?? [],
+                      );
+                      const overflowClipId = `bumpout-overflow-clip-${entity.id}`;
                       const strokeColor = "#ffffff";
                       const strokeWidth = 0.22;
                       const hostCutStrokeWidth = strokeWidth + 0.08;
@@ -7212,6 +7634,101 @@ export function Workspace() {
                             stroke="none"
                             shapeRendering="crispEdges"
                           />
+                          {labeledDuplicateOverflowRegions.length > 0 && (
+                            <g pointerEvents="none">
+                              <defs>
+                                <clipPath id={overflowClipId}>
+                                  <path d={`${path} Z`} />
+                                </clipPath>
+                              </defs>
+                              {labeledDuplicateOverflowRegions.map(({ region, label }, regionIndex) => {
+                                const labelCenterX = (region.minX + region.maxX) / 2 - entity.x;
+                                const labelCenterY = (region.minY + region.maxY) / 2 - entity.y;
+                                const regionAreaFt2 = region.cells.length;
+                                const outlineLoops = buildOverflowOutlineLoops(region.outline);
+                                const labelFontSize = clampValue(
+                                  Math.min(region.maxX - region.minX, region.maxY - region.minY) * 0.22,
+                                  0.34,
+                                  0.62,
+                                );
+
+                                return (
+                                  <g key={`${entity.id}-dup-overflow-region-${label}-${regionIndex}`}>
+                                    <g clipPath={`url(#${overflowClipId})`}>
+                                      {region.cells.map((cell) => (
+                                        <g key={`${entity.id}-dup-overflow-${cell.x}-${cell.y}`}>
+                                          <rect
+                                            x={cell.x - entity.x}
+                                            y={cell.y - entity.y}
+                                            width={cell.width}
+                                            height={cell.height}
+                                            fill="rgba(242, 202, 69, 0.72)"
+                                          />
+                                          <rect
+                                            x={cell.x - entity.x}
+                                            y={cell.y - entity.y}
+                                            width={cell.width}
+                                            height={cell.height}
+                                            fill="url(#duplicate-conditioned-hatch)"
+                                          />
+                                        </g>
+                                      ))}
+
+                                      {outlineLoops.map((loop, loopIndex) => {
+                                        const pathData = loop
+                                          .map((point, pointIndex) => {
+                                            const x = point.x - entity.x;
+                                            const y = point.y - entity.y;
+                                            return `${pointIndex === 0 ? "M" : "L"} ${x} ${y}`;
+                                          })
+                                          .join(" ");
+
+                                        return (
+                                          <path
+                                            key={`${entity.id}-dup-overflow-outline-${regionIndex}-${loopIndex}`}
+                                            d={`${pathData} Z`}
+                                            fill="none"
+                                            stroke="#b58518"
+                                            strokeWidth={0.08}
+                                            strokeLinejoin="round"
+                                            strokeLinecap="round"
+                                            vectorEffect="non-scaling-stroke"
+                                          />
+                                        );
+                                      })}
+                                    </g>
+
+                                    <text
+                                      x={labelCenterX}
+                                      y={labelCenterY - labelFontSize * 0.36}
+                                      textAnchor="middle"
+                                      fill="#6d4f09"
+                                      fontSize={labelFontSize}
+                                      fontWeight={900}
+                                      stroke="rgba(255, 252, 237, 0.72)"
+                                      strokeWidth={0.028}
+                                      paintOrder="stroke"
+                                    >
+                                      {label}
+                                    </text>
+                                    <text
+                                      x={labelCenterX}
+                                      y={labelCenterY + labelFontSize * 0.8}
+                                      textAnchor="middle"
+                                      fill="#6d4f09"
+                                      fontSize={labelFontSize}
+                                      fontWeight={900}
+                                      stroke="rgba(255, 252, 237, 0.72)"
+                                      strokeWidth={0.028}
+                                      paintOrder="stroke"
+                                    >
+                                      {`${regionAreaFt2} FT²`}
+                                    </text>
+                                  </g>
+                                );
+                              })}
+                            </g>
+                          )}
                           <mask id={strokeMaskId} maskUnits="userSpaceOnUse" x={-1} y={-1} width={width + 2} height={height + 2}>
                             <rect x={-1} y={-1} width={width + 2} height={height + 2} fill="#ffffff" />
                             {renderHostEdgeRangeLines(hostConnectedRanges, `${entity.id}-cut-host`, {
@@ -7244,12 +7761,20 @@ export function Workspace() {
                       const isUnconditioned = Boolean(entity.metadata.unconditioned);
                       const duplicateOverflowCells =
                         duplicateConditionedBaseline && !isUnconditioned
-                          ? getCellsOutsideDuplicateConditionedBaseline(
-                              { x: entity.x, y: entity.y, width, height },
-                              duplicateConditionedBaseline,
-                            )
+                          ? duplicateConditionedBaseline.mode === "outside-baseline"
+                            ? getCellsOutsideDuplicateConditionedBaseline(
+                                { x: entity.x, y: entity.y, width, height },
+                                duplicateConditionedBaseline.baseline,
+                              )
+                            : getCellsInsideDuplicateConditionedBaseline(
+                                { x: entity.x, y: entity.y, width, height },
+                                duplicateConditionedBaseline.baseline,
+                              )
                           : [];
-                      const duplicateOverflowRegions = buildDuplicateOverflowRegions(duplicateOverflowCells);
+                      const labeledDuplicateOverflowRegions = buildLabeledDuplicateOverflowRegions(
+                        duplicateOverflowCells,
+                        duplicateConditionedBaseline?.unconditionedLabelBaseline ?? [],
+                      );
                       const strokeColor = selected ? "#ffe59a" : "#ffffff";
                       const strokeWidth = selected ? 0.28 : 0.22;
                       const strokeMaskId = `rect-stroke-mask-${entity.id}`;
@@ -7356,9 +7881,9 @@ export function Workspace() {
                             fill={getRectangleFillColor(entity.metadata.color ?? "Blue")}
                             shapeRendering="crispEdges"
                           />
-                          {duplicateOverflowRegions.length > 0 && (
+                          {labeledDuplicateOverflowRegions.length > 0 && (
                             <g pointerEvents="none">
-                              {duplicateOverflowRegions.map((region, regionIndex) => {
+                              {labeledDuplicateOverflowRegions.map(({ region, label }, regionIndex) => {
                                 const labelCenterX = (region.minX + region.maxX) / 2 - entity.x;
                                 const labelCenterY = (region.minY + region.maxY) / 2 - entity.y;
                                 const regionAreaFt2 = region.cells.length;
@@ -7370,7 +7895,7 @@ export function Workspace() {
                                 );
 
                                 return (
-                                  <g key={`${entity.id}-dup-overflow-region-${regionIndex}`}>
+                                  <g key={`${entity.id}-dup-overflow-region-${label}-${regionIndex}`}>
                                     {region.cells.map((cell) => (
                                       <g key={`${entity.id}-dup-overflow-${cell.x}-${cell.y}`}>
                                         <rect
@@ -7424,7 +7949,7 @@ export function Workspace() {
                                       strokeWidth={0.028}
                                       paintOrder="stroke"
                                     >
-                                      over unconditoned space
+                                      {label}
                                     </text>
                                     <text
                                       x={labelCenterX}
@@ -7986,6 +8511,15 @@ export function Workspace() {
               </g>
             );
           })}
+
+          {selectedEntityForTopHighlight && (
+            <g
+              transform={`translate(${selectedEntityForTopHighlight.x} ${selectedEntityForTopHighlight.y}) rotate(${selectedEntityForTopHighlight.rotation})`}
+              pointerEvents="none"
+            >
+              {renderTopSelectionHighlight(selectedEntityForTopHighlight)}
+            </g>
+          )}
 
         </g>
 

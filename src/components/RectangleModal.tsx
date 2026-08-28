@@ -31,6 +31,7 @@ const STANDARD_LABEL_OPTIONS = [
   "",
   "Main Structure",
   "Garage",
+  "Kneewall",
   "Addition",
   "Sunroom",
   "Bump-Out",
@@ -38,7 +39,7 @@ const STANDARD_LABEL_OPTIONS = [
   "Garage (conditioned)",
   "Custom",
 ] as const;
-const BASEMENT_LABEL_OPTIONS = ["Basement", "Crawlspace"] as const;
+const BASEMENT_LABEL_OPTIONS = ["Basement", "Crawlspace", "Slab"] as const;
 const ATTIC_LABEL_OPTIONS = ["Flat", "Slope", "Vault", "Storage Space"] as const;
 
 type RectangleLabelOption = string;
@@ -199,6 +200,8 @@ export function RectangleModal({
   const [highHeightFt, setHighHeightFt] = useState(12);
   const [colorManuallySet, setColorManuallySet] = useState(false);
   const customLabelInputRef = useRef<HTMLInputElement | null>(null);
+  const isBasementSlab = isBasementFloor && labelOption === "Slab";
+  const effectiveCeilingType: CeilingType = isBasementSlab ? "none" : ceilingType;
 
   useEffect(() => {
     if (!isOpen) {
@@ -243,17 +246,17 @@ export function RectangleModal({
     if (isAtticFloor) {
       return true;
     }
-    if (ceilingType === "none") {
+    if (effectiveCeilingType === "none") {
       return true;
     }
-    if (ceilingType === "standard") {
+    if (effectiveCeilingType === "standard") {
       return standardHeightFt >= 1;
     }
-    if (ceilingType === "cathedral" || ceilingType === "cathedral-horizontal") {
+    if (effectiveCeilingType === "cathedral" || effectiveCeilingType === "cathedral-horizontal") {
       return lowHeightFt >= 1 && highHeightFt >= 1 && highHeightFt >= lowHeightFt;
     }
     return lowHeightFt >= 1 && highHeightFt >= 1;
-  }, [ceilingType, heightFt, highHeightFt, isAtticFloor, lowHeightFt, standardHeightFt, widthFt]);
+  }, [effectiveCeilingType, heightFt, highHeightFt, isAtticFloor, lowHeightFt, standardHeightFt, widthFt]);
 
   const sideLabels = useMemo(() => {
     if (ceilingType === "sloped-horizontal") {
@@ -285,7 +288,7 @@ export function RectangleModal({
                 setCustomLabel("");
               }
 
-              if (nextOption === "Garage" || nextOption === "Sunroom") {
+              if (nextOption === "Garage" || nextOption === "Sunroom" || nextOption === "Kneewall") {
                 setUnconditioned(true);
                 setColor("RED");
                 setColorManuallySet(false);
@@ -307,6 +310,14 @@ export function RectangleModal({
               if (isBasementFloor && nextOption === "Crawlspace") {
                 setColor("YELLOW");
                 setColorManuallySet(false);
+                setCeilingType("standard");
+                setStandardHeightFt(4);
+              }
+
+              if (isBasementFloor && nextOption === "Slab") {
+                setColor("RED");
+                setColorManuallySet(false);
+                setCeilingType("none");
               }
             }}
           >
@@ -392,8 +403,12 @@ export function RectangleModal({
             <div className="modal-row ceiling-row">
               <label>CEILING TYPE:</label>
               <select
-                value={ceilingType}
+                value={isBasementSlab ? "none" : ceilingType}
+                disabled={isBasementSlab}
                 onChange={(event) => {
+                  if (isBasementSlab) {
+                    return;
+                  }
                   const nextCeilingType = event.target.value as CeilingType;
                   setCeilingType(nextCeilingType);
                   if (!colorManuallySet) {
@@ -410,9 +425,9 @@ export function RectangleModal({
               </select>
             </div>
 
-            {ceilingType === "none" ? null : ceilingType === "standard" ? (
+            {effectiveCeilingType === "none" ? null : effectiveCeilingType === "standard" ? (
               <div className="modal-row">
-                <label>CEILING HEIGHT:</label>
+                <label>{isBasementFloor && labelOption === "Crawlspace" ? "HEIGHT:" : "CEILING HEIGHT:"}</label>
                 <StepperField value={standardHeightFt} onChange={setStandardHeightFt} />
               </div>
             ) : (
@@ -442,7 +457,7 @@ export function RectangleModal({
                 widthFt,
                 heightFt,
                 unconditioned: isAtticFloor ? false : unconditioned,
-                ceilingType: isAtticFloor ? "standard" : ceilingType,
+                ceilingType: isAtticFloor ? "standard" : effectiveCeilingType,
                 standardHeightFt: isAtticFloor ? 8 : standardHeightFt,
                 highHeightFt: isAtticFloor ? 12 : highHeightFt,
                 lowHeightFt: isAtticFloor ? 8 : lowHeightFt,

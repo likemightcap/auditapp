@@ -20,7 +20,6 @@ interface LevelModalState {
   mode: "create" | "edit";
   floorId?: string;
   initialPreset: FloorPreset;
-  initialName: string;
   initialUnconditioned: boolean;
 }
 
@@ -278,7 +277,6 @@ function EditorShell() {
     setLevelModalState({
       mode: "create",
       initialPreset: defaultPreset,
-      initialName: "",
       initialUnconditioned: false,
     });
   };
@@ -292,7 +290,6 @@ function EditorShell() {
       mode: "edit",
       floorId,
       initialPreset: getFloorPreset(floor),
-      initialName: "",
       initialUnconditioned: Boolean(floor.unconditioned),
     });
   };
@@ -418,7 +415,6 @@ function EditorShell() {
         editingFloorId={levelModalState?.floorId}
         existingFloors={state.project.floors}
         initialPreset={levelModalState?.initialPreset ?? "FIRST_FLOOR"}
-        initialName={levelModalState?.initialName ?? ""}
         initialUnconditioned={levelModalState?.initialUnconditioned ?? false}
         showDelete={levelModalState?.mode === "edit"}
         onCancel={() => setLevelModalState(null)}
