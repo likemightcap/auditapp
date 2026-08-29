@@ -11,9 +11,10 @@ interface BeforeInstallPromptEvent extends Event {
 interface FloorTabsProps {
   onRequestCreate: () => void;
   onRequestEdit: (floorId: string) => void;
+  onRequestResetCanvas: () => void;
 }
 
-export function FloorTabs({ onRequestCreate, onRequestEdit }: FloorTabsProps) {
+export function FloorTabs({ onRequestCreate, onRequestEdit, onRequestResetCanvas }: FloorTabsProps) {
   const { state, dispatch } = useEditor();
   const orderedFloors = sortFloorsByPresetOrder(state.project.floors);
   const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -145,9 +146,29 @@ export function FloorTabs({ onRequestCreate, onRequestEdit }: FloorTabsProps) {
       </div>
 
       {!isInstalled && (
-        <button type="button" className="floor-tab install" onClick={handleInstall}>
-          Download App
-        </button>
+        <>
+          <button
+            type="button"
+            className="floor-tab canvas-reset"
+            onClick={onRequestResetCanvas}
+            aria-label="Reset canvas controls"
+            title="Reset canvas controls"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M20 6v5h-5M4 18v-5h5M6.9 9.1A7 7 0 0 1 19 11M17.1 14.9A7 7 0 0 1 5 13"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.9"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+          <button type="button" className="floor-tab install" onClick={handleInstall}>
+            Download App
+          </button>
+        </>
       )}
     </div>
   );

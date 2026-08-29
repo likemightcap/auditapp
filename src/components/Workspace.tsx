@@ -888,8 +888,38 @@ function getRectangleFillColor(color: string): string {
   }
 }
 
+function getGhostRectangleFillColor(entity: MapEntity): string {
+  if (entity.type !== "rectangle") {
+    return "rgba(229, 240, 255, 0.08)";
+  }
+
+  const sourceColor = Boolean(entity.metadata.unconditioned)
+    ? "RED"
+    : String(entity.metadata.color ?? "BLUE").toUpperCase();
+
+  switch (sourceColor) {
+    case "GREEN":
+      return "rgba(42, 181, 106, 0.14)";
+    case "RED":
+      return "rgba(217, 74, 67, 0.16)";
+    case "YELLOW":
+      return "rgba(242, 202, 69, 0.15)";
+    case "WHITE":
+      return "rgba(255, 255, 255, 0.14)";
+    case "BLUE":
+    default:
+      return "rgba(56, 142, 255, 0.14)";
+  }
+}
+
 function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor?: Point }) {
   if (entity.type !== "rectangle") {
+    return null;
+  }
+
+  const overlayWidth = Math.max(entity.width, 0.4);
+  const overlayHeight = Math.max(entity.height, 0.4);
+  if (overlayWidth < 8 || overlayHeight < 3) {
     return null;
   }
 
@@ -2139,6 +2169,10 @@ interface DuplicateOverflowRegion {
 }
 
 type OverflowRegionLabel = "OVER UNCONDITIONED SPACE" | "OVERHANG";
+
+function getOverflowRegionFillColor(label: OverflowRegionLabel): string {
+  return label === "OVERHANG" ? "rgba(232, 142, 53, 0.48)" : "rgba(242, 202, 69, 0.5)";
+}
 
 interface LabeledDuplicateOverflowRegion {
   label: OverflowRegionLabel;
@@ -3614,7 +3648,22 @@ function getDragThresholdPx(pointerType: string | undefined): number {
   return 2;
 }
 
-export function Workspace() {
+function getRectangleCreateDragThresholdPx(pointerType: string | undefined): number {
+  // Slightly higher than general drag threshold to avoid accidental rectangle creation on tap.
+  if (pointerType === "touch") {
+    return 16;
+  }
+  if (pointerType === "pen") {
+    return 5;
+  }
+  return 4;
+}
+
+interface WorkspaceProps {
+  resetNavigationSignal?: number;
+}
+
+export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
 
     const cycleOrientation = () => {
       const currentIndex = ORIENTATION_ORDER.indexOf(state.project.orientation);
@@ -3696,6 +3745,16 @@ export function Workspace() {
     startWorld: { x: 0, y: 0 },
   });
 
+  const clearTouchGestureState = () => {
+    touchPointsRef.current.clear();
+    pinchGestureRef.current = {
+      active: false,
+      startDistance: 0,
+      startZoom: 0,
+      anchorWorld: { x: 0, y: 0 },
+    };
+  };
+
   const flushQueuedCameraUpdate = () => {
     cameraUpdateFrameRef.current = null;
 
@@ -3740,6 +3799,26 @@ export function Workspace() {
       if (cameraUpdateFrameRef.current !== null) {
         window.cancelAnimationFrame(cameraUpdateFrameRef.current);
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        clearTouchGestureState();
+      }
+    };
+
+    const onWindowBlur = () => {
+      clearTouchGestureState();
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("blur", onWindowBlur);
+
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("blur", onWindowBlur);
     };
   }, []);
 
@@ -5225,7 +5304,7 @@ export function Workspace() {
       const dx = event.clientX - interaction.startScreen.x;
       const dy = event.clientY - interaction.startScreen.y;
       const hasMoved =
-        interaction.dragStarted || Math.hypot(dx, dy) > getDragThresholdPx(interaction.pointerType);
+        interaction.dragStarted || Math.hypot(dx, dy) > getRectangleCreateDragThresholdPx(interaction.pointerType);
 
       if (!hasMoved) {
         return;
@@ -5675,6 +5754,47 @@ export function Workspace() {
       dispatch({ type: "CLEAR_WALL_DRAFT" });
     }
   };
+
+  const handleLostPointerCapture = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (event.pointerType === "touch") {
+      touchPointsRef.current.delete(event.pointerId);
+      if (touchPointsRef.current.size < 2) {
+        pinchGestureRef.current.active = false;
+      }
+    }
+
+    if (interactionRef.current.pointerId === event.pointerId) {
+      dispatch({ type: "CLEAR_PREVIEW_ENTITY" });
+      setDraftEntity(null);
+      clearLongPress();
+      finishInteraction();
+    }
+  };
+
+  const resetCanvasNavigationState = () => {
+    clearTouchGestureState();
+    if (cameraUpdateFrameRef.current !== null) {
+      window.cancelAnimationFrame(cameraUpdateFrameRef.current);
+      cameraUpdateFrameRef.current = null;
+    }
+    pendingPanDeltaRef.current = { x: 0, y: 0 };
+    pendingSetCameraRef.current = null;
+    clearLongPress();
+    dispatch({ type: "CLEAR_PREVIEW_ENTITY" });
+    setDraftEntity(null);
+    setOpeningPlacementPreview(null);
+    setResizeHint(null);
+    setHoveredSelectedEntityId(null);
+    finishInteraction();
+  };
+
+  const lastResetNavigationSignalRef = useRef(resetNavigationSignal);
+  useEffect(() => {
+    if (resetNavigationSignal !== lastResetNavigationSignalRef.current) {
+      lastResetNavigationSignalRef.current = resetNavigationSignal;
+      resetCanvasNavigationState();
+    }
+  }, [resetNavigationSignal]);
 
   const handleWheel = (event: ReactWheelEvent<SVGSVGElement>) => {
     event.preventDefault();
@@ -6724,6 +6844,7 @@ export function Workspace() {
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
+        onLostPointerCapture={handleLostPointerCapture}
         onDoubleClick={(event) => {
           const target = event.target as Element | null;
           const isEmptyGridTarget = target === event.currentTarget || target?.tagName.toLowerCase() === "rect";
@@ -6826,7 +6947,7 @@ export function Workspace() {
                     <g key={`ghost-entity-${entity.id}`} transform={`translate(${entity.x} ${entity.y}) rotate(${entity.rotation})`}>
                       <path
                         d={`${path} Z`}
-                        fill="rgba(229, 240, 255, 0.12)"
+                        fill={getGhostRectangleFillColor(entity)}
                         stroke="#e5f0ff"
                         strokeWidth={0.2}
                         strokeOpacity={0.5}
@@ -6844,7 +6965,7 @@ export function Workspace() {
                         width={Math.max(entity.width, 0.4)}
                         height={Math.max(entity.height, 0.4)}
                         rx={0.1}
-                        fill="rgba(229, 240, 255, 0.08)"
+                        fill={getGhostRectangleFillColor(entity)}
                         stroke="#e5f0ff"
                         strokeWidth={0.2}
                         strokeOpacity={0.46}
@@ -7692,6 +7813,7 @@ export function Workspace() {
                                 const labelCenterX = (region.minX + region.maxX) / 2 - entity.x;
                                 const labelCenterY = (region.minY + region.maxY) / 2 - entity.y;
                                 const regionAreaFt2 = region.cells.length;
+                                const overflowFillColor = getOverflowRegionFillColor(label);
                                 const outlineLoops = buildOverflowOutlineLoops(region.outline);
                                 const labelFontSize = clampValue(
                                   Math.min(region.maxX - region.minX, region.maxY - region.minY) * 0.22,
@@ -7709,7 +7831,7 @@ export function Workspace() {
                                             y={cell.y - entity.y}
                                             width={cell.width}
                                             height={cell.height}
-                                            fill="rgba(242, 202, 69, 0.72)"
+                                            fill={overflowFillColor}
                                           />
                                           <rect
                                             x={cell.x - entity.x}
@@ -7717,6 +7839,7 @@ export function Workspace() {
                                             width={cell.width}
                                             height={cell.height}
                                             fill="url(#duplicate-conditioned-hatch)"
+                                            opacity={0.62}
                                           />
                                         </g>
                                       ))}
@@ -7747,20 +7870,7 @@ export function Workspace() {
 
                                     <text
                                       x={labelCenterX}
-                                      y={labelCenterY - labelFontSize * 0.36}
-                                      textAnchor="middle"
-                                      fill="#6d4f09"
-                                      fontSize={labelFontSize}
-                                      fontWeight={900}
-                                      stroke="rgba(255, 252, 237, 0.72)"
-                                      strokeWidth={0.028}
-                                      paintOrder="stroke"
-                                    >
-                                      {label}
-                                    </text>
-                                    <text
-                                      x={labelCenterX}
-                                      y={labelCenterY + labelFontSize * 0.8}
+                                      y={labelCenterY + labelFontSize * 0.2}
                                       textAnchor="middle"
                                       fill="#6d4f09"
                                       fontSize={labelFontSize}
@@ -7934,6 +8044,7 @@ export function Workspace() {
                                 const labelCenterX = (region.minX + region.maxX) / 2 - entity.x;
                                 const labelCenterY = (region.minY + region.maxY) / 2 - entity.y;
                                 const regionAreaFt2 = region.cells.length;
+                                const overflowFillColor = getOverflowRegionFillColor(label);
                                 const outlineLoops = buildOverflowOutlineLoops(region.outline);
                                 const labelFontSize = clampValue(
                                   Math.min(region.maxX - region.minX, region.maxY - region.minY) * 0.22,
@@ -7950,7 +8061,7 @@ export function Workspace() {
                                           y={cell.y - entity.y}
                                           width={cell.width}
                                           height={cell.height}
-                                          fill="rgba(242, 202, 69, 0.72)"
+                                          fill={overflowFillColor}
                                         />
                                         <rect
                                           x={cell.x - entity.x}
@@ -7958,6 +8069,7 @@ export function Workspace() {
                                           width={cell.width}
                                           height={cell.height}
                                           fill="url(#duplicate-conditioned-hatch)"
+                                          opacity={0.62}
                                         />
                                       </g>
                                     ))}
@@ -7987,20 +8099,7 @@ export function Workspace() {
 
                                     <text
                                       x={labelCenterX}
-                                      y={labelCenterY - labelFontSize * 0.36}
-                                      textAnchor="middle"
-                                      fill="#6d4f09"
-                                      fontSize={labelFontSize}
-                                      fontWeight={900}
-                                      stroke="rgba(255, 252, 237, 0.72)"
-                                      strokeWidth={0.028}
-                                      paintOrder="stroke"
-                                    >
-                                      {label}
-                                    </text>
-                                    <text
-                                      x={labelCenterX}
-                                      y={labelCenterY + labelFontSize * 0.8}
+                                      y={labelCenterY + labelFontSize * 0.2}
                                       textAnchor="middle"
                                       fill="#6d4f09"
                                       fontSize={labelFontSize}
@@ -8767,7 +8866,7 @@ export function Workspace() {
 
           const metadata = {
             color: payload.color,
-            unconditioned: isActiveFloorAttic ? false : payload.unconditioned,
+            unconditioned: payload.unconditioned,
             ceilingType: isActiveFloorAttic ? "standard" : payload.ceilingType,
             standardHeightFt: isActiveFloorAttic ? 8 : payload.standardHeightFt,
             lowHeightFt: isActiveFloorAttic ? 8 : payload.lowHeightFt,

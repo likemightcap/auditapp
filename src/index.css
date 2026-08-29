@@ -1644,7 +1644,7 @@ select {
 }
 
 .floor-tab.install {
-  margin-left: auto;
+  margin-left: 8px;
   min-width: 136px;
   border-color: #d4e0ef;
   background: linear-gradient(180deg, #ffffff 0%, #eff5fe 100%);
@@ -1652,6 +1652,18 @@ select {
   font-size: 0.78rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.floor-tab.canvas-reset {
+  margin-left: auto;
+  min-width: 40px;
+  width: 40px;
+  padding: 0;
+}
+
+.floor-tab.canvas-reset svg {
+  width: 18px;
+  height: 18px;
 }
 
 @media (max-width: 1120px) {
@@ -1824,6 +1836,16 @@ select {
     min-width: 108px;
     font-size: 0.64rem;
     letter-spacing: 0.035em;
+  }
+
+  .floor-tab.canvas-reset {
+    min-width: 30px;
+    width: 30px;
+  }
+
+  .floor-tab.canvas-reset svg {
+    width: 14px;
+    height: 14px;
   }
 }
 

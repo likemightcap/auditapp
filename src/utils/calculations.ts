@@ -408,8 +408,7 @@ export function calculateProjectMetrics(project: Project, previewEntity: MapEnti
   let totalAtticAreaFt2 = 0;
 
   const orderedFloors = sortFloorsByPresetOrder(project.floors);
-  for (let index = 0; index < orderedFloors.length; index += 1) {
-    const floor = orderedFloors[index];
+  for (const floor of orderedFloors) {
     const preset = floor.floorPreset ?? inferFloorPresetFromName(floor.name);
     if (!isAtticPreset(preset)) {
       continue;
@@ -420,20 +419,7 @@ export function calculateProjectMetrics(project: Project, previewEntity: MapEnti
       continue;
     }
 
-    const supportingFloor = index > 0 ? orderedFloors[index - 1] : null;
-    if (!supportingFloor) {
-      continue;
-    }
-    const supportingCells = conditionedRectangleCells(supportingFloor);
-    if (supportingCells.size === 0) {
-      continue;
-    }
-
-    for (const cell of atticCells) {
-      if (supportingCells.has(cell)) {
-        totalAtticAreaFt2 += 1;
-      }
-    }
+    totalAtticAreaFt2 += atticCells.size;
   }
 
   for (const floor of project.floors) {

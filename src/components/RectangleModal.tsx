@@ -205,7 +205,7 @@ export function RectangleModal({
   const isBasementCrawlspace = isBasementFloor && labelOption === "Crawlspace";
   const isBasementSlab = isBasementFloor && labelOption === "Slab";
   const showBasementCrawlspaceUnconditioned = isBasementCrawlspace && !floorUnconditioned;
-  const effectiveUnconditioned = isAtticFloor ? false : isBasementSlab ? true : unconditioned;
+  const effectiveUnconditioned = isBasementSlab ? true : unconditioned;
   const effectiveCeilingType: CeilingType = isBasementSlab ? "none" : ceilingType;
 
   useEffect(() => {
@@ -226,7 +226,6 @@ export function RectangleModal({
     setColorManuallySet(false);
 
     if (isAtticFloor) {
-      setUnconditioned(false);
       setCeilingType("standard");
       setStandardHeightFt(8);
       setLowHeightFt(8);
@@ -283,7 +282,7 @@ export function RectangleModal({
         <h2>RECTANGLE</h2>
 
         <div className="modal-row">
-          <label>LABEL:</label>
+          <label>PRESET:</label>
           <select
             value={labelOption}
             onChange={(event) => {
@@ -404,6 +403,21 @@ export function RectangleModal({
                 }}
               />
               <span>Exclude from area and volume</span>
+            </label>
+          </div>
+        )}
+
+        {isAtticFloor && (
+          <div className="modal-row">
+            <label>EXCLUDE:</label>
+            <label className="modal-checkbox rect-unconditioned-checkbox" htmlFor="rectAtticUnconditioned">
+              <input
+                id="rectAtticUnconditioned"
+                type="checkbox"
+                checked={unconditioned}
+                onChange={(event) => setUnconditioned(event.target.checked)}
+              />
+              <span>Exclude from total attic area</span>
             </label>
           </div>
         )}

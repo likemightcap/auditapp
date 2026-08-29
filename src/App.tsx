@@ -72,6 +72,7 @@ function EditorShell() {
   const sidebarScaleTargetRef = useRef<HTMLDivElement | null>(null);
   const [sidebarScale, setSidebarScale] = useState(1);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [canvasResetSignal, setCanvasResetSignal] = useState(0);
   const sidebarBaseWidth = sidebarCollapsed ? SIDEBAR_COLLAPSED_BASE_WIDTH : SIDEBAR_BASE_WIDTH;
 
   useEffect(() => {
@@ -397,7 +398,7 @@ function EditorShell() {
           </div>
         </header>
 
-        <Workspace />
+        <Workspace resetNavigationSignal={canvasResetSignal} />
         {!hasLayout && (
           <div className="layout-lock-overlay">
             <button type="button" className="create-layout-btn" onClick={openCreateLevelModal}>
@@ -405,7 +406,11 @@ function EditorShell() {
             </button>
           </div>
         )}
-        <FloorTabs onRequestCreate={openCreateLevelModal} onRequestEdit={openEditLevelModal} />
+        <FloorTabs
+          onRequestCreate={openCreateLevelModal}
+          onRequestEdit={openEditLevelModal}
+          onRequestResetCanvas={() => setCanvasResetSignal((current) => current + 1)}
+        />
       </main>
 
       <LevelModal
