@@ -145,30 +145,29 @@ export function FloorTabs({ onRequestCreate, onRequestEdit, onRequestResetCanvas
       </button>
       </div>
 
+      <button
+        type="button"
+        className="floor-tab canvas-reset"
+        onClick={onRequestResetCanvas}
+        aria-label="Reset canvas controls"
+        title="Reset canvas controls"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            d="M20 6v5h-5M4 18v-5h5M6.9 9.1A7 7 0 0 1 19 11M17.1 14.9A7 7 0 0 1 5 13"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.9"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </button>
+
       {!isInstalled && (
-        <>
-          <button
-            type="button"
-            className="floor-tab canvas-reset"
-            onClick={onRequestResetCanvas}
-            aria-label="Reset canvas controls"
-            title="Reset canvas controls"
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                d="M20 6v5h-5M4 18v-5h5M6.9 9.1A7 7 0 0 1 19 11M17.1 14.9A7 7 0 0 1 5 13"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.9"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </button>
-          <button type="button" className="floor-tab install" onClick={handleInstall}>
-            Download App
-          </button>
-        </>
+        <button type="button" className="floor-tab install" onClick={handleInstall}>
+          Download App
+        </button>
       )}
     </div>
   );
