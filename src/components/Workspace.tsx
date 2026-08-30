@@ -98,6 +98,7 @@ const WINDOW_HANDLE_HIT_SLOP = 0.76;
 const WINDOW_LABEL_OFFSET = 1.02;
 const LINEAR_MARKER_COLOR = "#edf5ff";
 const RESIZE_HINT_COLOR = "#7de8ff";
+const SMART_GUIDE_HIGHLIGHT_COLOR = "#67f5ff";
 const OPENING_SIZE_LABEL_COLOR = "#1c3358";
 const ORIENTATION_ORDER: Orientation[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
 const OPENING_SIZE_LABEL_FONT_SIZE = 0.92;
@@ -129,6 +130,28 @@ type BumpOutFlats = 3 | 4 | 5 | 6;
 
 function isBumpOutRectangle(entity: MapEntity): boolean {
   return entity.type === "rectangle" && entity.metadata.shapeType === "bumpout";
+}
+
+function matchesSmartGuideTool(entity: MapEntity, tool: ToolId): boolean {
+  if (tool === "select") {
+    return true;
+  }
+  if (tool === "window") {
+    return entity.type === "window";
+  }
+  if (tool === "door") {
+    return entity.type === "door";
+  }
+  if (tool === "rectangle") {
+    return entity.type === "rectangle" && !isBumpOutRectangle(entity);
+  }
+  if (tool === "bumpout") {
+    return entity.type === "rectangle" && isBumpOutRectangle(entity);
+  }
+  if (tool === "wall") {
+    return false;
+  }
+  return entity.type === tool;
 }
 
 function getBumpOutFlats(entity: MapEntity): BumpOutFlats {
@@ -3718,6 +3741,8 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
   const [showSupportingFloorplan, setShowSupportingFloorplan] = useState(false);
   const [resizeHint, setResizeHint] = useState<ResizeHintState | null>(null);
   const [hoveredSelectedEntityId, setHoveredSelectedEntityId] = useState<string | null>(null);
+  const [hoveredSmartGuideEntityId, setHoveredSmartGuideEntityId] = useState<string | null>(null);
+  const [supportsPointerHover, setSupportsPointerHover] = useState(() => window.matchMedia("(hover: hover)").matches);
   const [openingPlacementPreview, setOpeningPlacementPreview] = useState<MapEntity | null>(null);
   const [pointerScreen, setPointerScreen] = useState<Point | null>(null);
   const [viewportSize, setViewportSize] = useState<ViewportSize>({ width: 0, height: 0 });
@@ -3821,6 +3846,24 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
       window.removeEventListener("blur", onWindowBlur);
     };
   }, []);
+
+  useEffect(() => {
+    const hoverMedia = window.matchMedia("(hover: hover)");
+    const updateSupport = () => {
+      setSupportsPointerHover(hoverMedia.matches);
+    };
+
+    updateSupport();
+    hoverMedia.addEventListener("change", updateSupport);
+
+    return () => {
+      hoverMedia.removeEventListener("change", updateSupport);
+    };
+  }, []);
+
+  useEffect(() => {
+    setHoveredSmartGuideEntityId(null);
+  }, [state.activeTool, floor.id]);
 
   const pointById = useMemo(() => new Map(floor.wallPoints.map((point) => [point.id, point])), [floor.wallPoints]);
   const rectangleEntities = useMemo(
@@ -6589,6 +6632,26 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
     return displayEntities.find((entity) => entity.id === selection.id) ?? null;
   })();
 
+  const smartGuideEntityForTopHighlight = (() => {
+    if (!hoveredSmartGuideEntityId) {
+      return null;
+    }
+    if (interactionRef.current.type !== "none") {
+      return null;
+    }
+    const hovered = displayEntities.find((entity) => entity.id === hoveredSmartGuideEntityId);
+    if (!hovered) {
+      return null;
+    }
+    if (!matchesSmartGuideTool(hovered, state.activeTool)) {
+      return null;
+    }
+    if (state.selection.kind === "entity" && state.selection.id === hovered.id) {
+      return null;
+    }
+    return hovered;
+  })();
+
   const renderTopSelectionHighlight = (entity: MapEntity): ReactElement | null => {
     const stroke = "#ffe59a";
 
@@ -6806,6 +6869,27 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
     (showMoveCursorOverlay && moveCursorScreen);
   const showSelectedEditIcon = Boolean(selectedEditableEntity);
   const selectedBumpOutAngleBias = selectedBumpOutEntity ? getBumpOutAngleBias(selectedBumpOutEntity) : 0;
+  const handleEntitySmartGuidePointerEnter = (event: ReactPointerEvent<SVGElement>, entity: MapEntity) => {
+    const hoverCapableInput = event.pointerType === "mouse" || event.pointerType === "pen";
+    if (!hoverCapableInput) {
+      return;
+    }
+    if (!supportsPointerHover && event.pointerType !== "pen") {
+      return;
+    }
+    if (!matchesSmartGuideTool(entity, state.activeTool)) {
+      return;
+    }
+    if (interactionRef.current.type !== "none") {
+      return;
+    }
+    setHoveredSmartGuideEntityId(entity.id);
+  };
+
+  const handleEntitySmartGuidePointerLeave = (entityId: string) => {
+    setHoveredSmartGuideEntityId((current) => (current === entityId ? null : current));
+  };
+
   const selectedBumpOutControlScreen = useMemo(() => {
     if (!selectedBumpOutEntity || viewportSize.width <= 0 || viewportSize.height <= 0) {
       return null;
@@ -6855,6 +6939,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
         onPointerLeave={() => {
           setResizeHint((current) => (current ? null : current));
           setHoveredSelectedEntityId(null);
+          setHoveredSmartGuideEntityId(null);
           setOpeningPlacementPreview(null);
           setPointerScreen(null);
         }}
@@ -6992,16 +7077,21 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
 
                 if (entity.type === "window") {
                   return (
-                    <g key={`ghost-entity-${entity.id}`} transform={`translate(${entity.x} ${entity.y}) rotate(${entity.rotation})`}>
-                      <line
-                        x1={-entity.width / 2}
-                        y1={0}
-                        x2={entity.width / 2}
-                        y2={0}
+                    <g
+                      key={`ghost-entity-${entity.id}`}
+                      className="ghost-entity ghost-entity-window"
+                      transform={`translate(${entity.x} ${entity.y}) rotate(${entity.rotation})`}
+                    >
+                      <rect
+                        x={-entity.width / 2}
+                        y={-WINDOW_FILL_THICKNESS / 2}
+                        width={entity.width}
+                        height={WINDOW_FILL_THICKNESS}
+                        fill="#d9ebff"
+                        fillOpacity={0.26}
                         stroke="#d9ebff"
-                        strokeWidth={0.28}
+                        strokeWidth={0.22}
                         strokeOpacity={0.56}
-                        strokeLinecap="round"
                       />
                     </g>
                   );
@@ -7116,7 +7206,11 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
 
                 if (isUtilityEntityType(entity.type)) {
                   return (
-                    <g key={`ghost-entity-${entity.id}`} transform={`translate(${entity.x} ${entity.y}) rotate(${entity.rotation})`}>
+                    <g
+                      key={`ghost-entity-${entity.id}`}
+                      className="ghost-entity ghost-entity-utility"
+                      transform={`translate(${entity.x} ${entity.y}) rotate(${entity.rotation})`}
+                    >
                       <rect
                         x={-entity.width / 2}
                         y={-entity.height / 2}
@@ -7228,16 +7322,19 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
             return (
               <g
                 key={entity.id}
+                className={`map-entity map-entity-${entity.type}`}
                 {...common}
                 opacity={isOpeningPreviewEntity ? 0.45 : 1}
                 pointerEvents={isOpeningPreviewEntity ? "none" : undefined}
                 onPointerDown={(event) => handleEntityDown(event, entity)}
-                onPointerEnter={() => {
+                onPointerEnter={(event) => {
+                  handleEntitySmartGuidePointerEnter(event, entity);
                   if (state.selection.kind === "entity" && state.selection.id === entity.id) {
                     setHoveredSelectedEntityId(entity.id);
                   }
                 }}
                 onPointerLeave={() => {
+                  handleEntitySmartGuidePointerLeave(entity.id);
                   if (state.selection.kind === "entity" && state.selection.id === entity.id) {
                     setHoveredSelectedEntityId((current) => (current === entity.id ? null : current));
                   }
@@ -8612,14 +8709,17 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
             return (
               <g
                 key={entity.id}
+                className="map-entity map-entity-text"
                 transform={`translate(${entity.x} ${entity.y}) rotate(${entity.rotation})`}
                 onPointerDown={(event) => handleEntityDown(event, entity)}
-                onPointerEnter={() => {
+                onPointerEnter={(event) => {
+                  handleEntitySmartGuidePointerEnter(event, entity);
                   if (state.selection.kind === "entity" && state.selection.id === entity.id) {
                     setHoveredSelectedEntityId(entity.id);
                   }
                 }}
                 onPointerLeave={() => {
+                  handleEntitySmartGuidePointerLeave(entity.id);
                   if (state.selection.kind === "entity" && state.selection.id === entity.id) {
                     setHoveredSelectedEntityId((current) => (current === entity.id ? null : current));
                   }
@@ -8664,6 +8764,141 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
               pointerEvents="none"
             >
               {renderTopSelectionHighlight(selectedEntityForTopHighlight)}
+            </g>
+          )}
+
+          {smartGuideEntityForTopHighlight && (
+            <g
+              transform={`translate(${smartGuideEntityForTopHighlight.x} ${smartGuideEntityForTopHighlight.y}) rotate(${smartGuideEntityForTopHighlight.rotation})`}
+              pointerEvents="none"
+            >
+              {(() => {
+                const entity = smartGuideEntityForTopHighlight;
+
+                if (entity.type === "text") {
+                  const bounds = getTextBounds(entity.label, getTextSize(entity));
+                  return (
+                    <rect
+                      x={bounds.selectionX}
+                      y={bounds.selectionY}
+                      width={bounds.selectionWidth}
+                      height={bounds.selectionHeight}
+                      fill="transparent"
+                      stroke={SMART_GUIDE_HIGHLIGHT_COLOR}
+                      strokeWidth={0.12}
+                      rx={0.1}
+                    />
+                  );
+                }
+
+                if (entity.type === "rectangle") {
+                  if (isBumpOutRectangle(entity)) {
+                    return (
+                      <path
+                        d={`${bumpOutPath(getBumpOutRenderPoints(entity))} Z`}
+                        fill="none"
+                        stroke={SMART_GUIDE_HIGHLIGHT_COLOR}
+                        strokeWidth={0.16}
+                        strokeLinejoin="round"
+                      />
+                    );
+                  }
+
+                  return (
+                    <rect
+                      x={0}
+                      y={0}
+                      width={Math.max(entity.width, 0.4)}
+                      height={Math.max(entity.height, 0.4)}
+                      rx={0.1}
+                      fill="transparent"
+                      stroke={SMART_GUIDE_HIGHLIGHT_COLOR}
+                      strokeWidth={0.16}
+                    />
+                  );
+                }
+
+                if (entity.type === "window") {
+                  return (
+                    <rect
+                      x={-entity.width / 2 - WINDOW_SELECTION_PADDING}
+                      y={-WINDOW_FILL_THICKNESS / 2 - WINDOW_SELECTION_PADDING}
+                      width={entity.width + WINDOW_SELECTION_PADDING * 2}
+                      height={WINDOW_FILL_THICKNESS + WINDOW_SELECTION_PADDING * 2}
+                      fill="transparent"
+                      stroke={SMART_GUIDE_HIGHLIGHT_COLOR}
+                      strokeWidth={0.12}
+                      rx={0.14}
+                    />
+                  );
+                }
+
+                if (entity.type === "door") {
+                  const doorVisualWidth = Math.max(1, getDoorVisualWidth(entity));
+                  const doorKind = getDoorKind(entity);
+                  if (doorKind === "sliding") {
+                    return (
+                      <rect
+                        x={-doorVisualWidth / 2 - WINDOW_SELECTION_PADDING}
+                        y={-WINDOW_FILL_THICKNESS / 2 - WINDOW_SELECTION_PADDING}
+                        width={doorVisualWidth + WINDOW_SELECTION_PADDING * 2}
+                        height={WINDOW_FILL_THICKNESS + WINDOW_SELECTION_PADDING * 2}
+                        fill="transparent"
+                        stroke={SMART_GUIDE_HIGHLIGHT_COLOR}
+                        strokeWidth={0.12}
+                        rx={0.14}
+                      />
+                    );
+                  }
+
+                  const flipSign = Boolean(entity.metadata.flipped) ? -1 : 1;
+                  return (
+                    <rect
+                      x={-doorVisualWidth / 2 - 0.2}
+                      y={(flipSign === 1 ? 0 : -doorVisualWidth) - 0.2}
+                      width={doorVisualWidth + 0.4}
+                      height={doorVisualWidth + 0.4}
+                      fill="transparent"
+                      stroke={SMART_GUIDE_HIGHLIGHT_COLOR}
+                      strokeWidth={0.12}
+                      rx={0.14}
+                    />
+                  );
+                }
+
+                if (entity.type === "line") {
+                  const pad = 0.24;
+                  const minX = Math.min(0, entity.width) - pad;
+                  const minY = Math.min(0, entity.height) - pad;
+                  const maxX = Math.max(0, entity.width) + pad;
+                  const maxY = Math.max(0, entity.height) + pad;
+                  return (
+                    <rect
+                      x={minX}
+                      y={minY}
+                      width={Math.max(0.4, maxX - minX)}
+                      height={Math.max(0.4, maxY - minY)}
+                      fill="transparent"
+                      stroke={SMART_GUIDE_HIGHLIGHT_COLOR}
+                      strokeWidth={0.12}
+                      rx={0.14}
+                    />
+                  );
+                }
+
+                return (
+                  <rect
+                    x={-entity.width / 2 - 0.2}
+                    y={-entity.height / 2 - 0.2}
+                    width={Math.max(entity.width, 0.4) + 0.4}
+                    height={Math.max(entity.height, 0.4) + 0.4}
+                    fill="transparent"
+                    stroke={SMART_GUIDE_HIGHLIGHT_COLOR}
+                    strokeWidth={0.12}
+                    rx={0.14}
+                  />
+                );
+              })()}
             </g>
           )}
 

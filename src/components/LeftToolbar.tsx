@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { PDFDocument, StandardFonts, degrees, rgb } from "pdf-lib";
 import { calculateProjectMetrics } from "../utils/calculations";
@@ -16,6 +16,9 @@ import { WindowModal } from "./WindowModal";
 import type { WindowModalSubmit } from "./WindowModal";
 import { UtilityLabelModal } from "./UtilityLabelModal";
 import type { UtilityLabelInitialValues, UtilityLabelSubmit } from "./UtilityLabelModal";
+import { ExportPdfModal } from "./ExportPdfModal";
+import type { ExportPdfStyleOptions, ExportPdfThemePreset } from "./ExportPdfModal";
+import { GRAYSCALE_COLOR_TOKEN } from "./ExportPdfModal";
 import { MAX_ZOOM, MIN_ZOOM, clamp, screenToWorld, snapPointToGrid } from "../utils/geometry";
 import type { CameraState, FloorData, MapEntity, ToolId } from "../types";
 
@@ -71,6 +74,16 @@ interface LevelRender {
   name: string;
   pngDataUrl: string;
 }
+
+const UTILITY_EXPORT_ENTITY_SELECTORS = [
+  ".map-entity-condenser",
+  ".map-entity-heater",
+  ".map-entity-dhw",
+  ".map-entity-gas",
+  ".map-entity-electric",
+  ".map-entity-other",
+  ".ghost-entity-utility",
+].join(", ");
 
 function isUtilityEntityType(type: MapEntity["type"]): boolean {
   return type === "condenser" || type === "heater" || type === "dhw" || type === "gas" || type === "electric" || type === "other";
@@ -191,7 +204,124 @@ function collectDocumentCssText(): string {
   return chunks.join("\n");
 }
 
-async function captureWorkspacePngDataUrl(svg: SVGSVGElement, scale = 2): Promise<string> {
+function removeElementsBySelector(root: ParentNode, selector: string): void {
+  for (const element of Array.from(root.querySelectorAll(selector))) {
+    element.remove();
+  }
+}
+
+function findWorkspaceBackgroundRect(svg: SVGSVGElement): SVGRectElement | null {
+  return svg.querySelector("rect[fill='url(#workspace-bg)']");
+}
+
+function getGridLines(svg: SVGSVGElement): SVGLineElement[] {
+  return Array.from(svg.querySelectorAll("line[data-export-grid='true']"));
+}
+
+function markGridLines(svg: SVGSVGElement): void {
+  const baseGridLines = svg.querySelectorAll<SVGLineElement>("line[stroke='#a8c8ee']");
+  for (const line of Array.from(baseGridLines)) {
+    line.setAttribute("data-export-grid", "true");
+  }
+}
+
+function recolorVisibleStrokes(svg: SVGSVGElement, stroke: string): void {
+  const stroked = svg.querySelectorAll<SVGElement>("line,path,rect,circle,ellipse,polygon,polyline");
+  for (const element of Array.from(stroked)) {
+    const currentStroke = element.getAttribute("stroke");
+    if (!currentStroke) {
+      continue;
+    }
+    const normalized = currentStroke.trim().toLowerCase();
+    if (normalized === "none" || normalized === "transparent" || normalized.startsWith("url(")) {
+      continue;
+    }
+    element.setAttribute("stroke", stroke);
+  }
+}
+
+function recolorAllText(svg: SVGSVGElement, fill: string, stroke: string): void {
+  const texts = svg.querySelectorAll<SVGTextElement>("text");
+  for (const text of Array.from(texts)) {
+    text.setAttribute("fill", fill);
+    if (stroke === "none") {
+      text.setAttribute("stroke", "none");
+      text.setAttribute("stroke-width", "0");
+    } else {
+      text.setAttribute("stroke", stroke);
+    }
+  }
+}
+
+function applyExportThemePreset(svg: SVGSVGElement, preset: ExportPdfThemePreset): void {
+  if (preset === "default" || preset === "standard") {
+    return;
+  }
+
+  const backgroundRect = findWorkspaceBackgroundRect(svg);
+  const gridLines = getGridLines(svg);
+
+  if (preset === "light") {
+    if (backgroundRect) {
+      backgroundRect.setAttribute("fill", "#ffffff");
+    }
+    for (const line of gridLines) {
+      line.setAttribute("stroke", "#f6f8fb");
+      line.setAttribute("opacity", "0.22");
+    }
+
+    recolorVisibleStrokes(svg, "#55606b");
+    recolorAllText(svg, "#4e5760", "none");
+
+    for (const marker of Array.from(svg.querySelectorAll<SVGElement>(".rect-guides polygon, .rect-drag-size-cue polygon, .ceiling-overlay polygon"))) {
+      marker.setAttribute("fill", "#55606b");
+    }
+    return;
+  }
+
+  if (preset === "dark") {
+    if (backgroundRect) {
+      backgroundRect.setAttribute("fill", "#172733");
+    }
+    for (const line of gridLines) {
+      line.setAttribute("stroke", "#223848");
+      line.setAttribute("opacity", "0.78");
+    }
+
+    recolorAllText(svg, "#ffffff", "none");
+  }
+}
+
+function applyExportVisibilityOptions(svg: SVGSVGElement, options: ExportPdfStyleOptions): void {
+  if (options.hideGrid) {
+    for (const line of getGridLines(svg)) {
+      line.remove();
+    }
+  }
+
+  if (options.hideLinearFeetMarkers) {
+    removeElementsBySelector(svg, ".rect-guides");
+    removeElementsBySelector(svg, ".rect-drag-size-cue");
+    removeElementsBySelector(svg, "text.dim-label");
+  }
+
+  if (options.hideLabels) {
+    removeElementsBySelector(svg, "text");
+    removeElementsBySelector(svg, ".ceiling-height-box");
+  }
+
+  if (options.hideUtilities) {
+    removeElementsBySelector(svg, UTILITY_EXPORT_ENTITY_SELECTORS);
+  }
+}
+
+function applyExportStyleToSvgClone(svg: SVGSVGElement, options: ExportPdfStyleOptions): void {
+  markGridLines(svg);
+  applyExportThemePreset(svg, options.themePreset);
+  applyExportVisibilityOptions(svg, options);
+}
+
+async function captureWorkspacePngDataUrl(svg: SVGSVGElement, options: ExportPdfStyleOptions, scale = 2): Promise<string> {
   const width = Math.max(1, Math.round(svg.clientWidth));
   const height = Math.max(1, Math.round(svg.clientHeight));
   const clone = svg.cloneNode(true) as SVGSVGElement;
@@ -208,6 +338,8 @@ async function captureWorkspacePngDataUrl(svg: SVGSVGElement, scale = 2): Promis
     style.textContent = cssText;
     clone.insertBefore(style, clone.firstChild);
   }
+
+  applyExportStyleToSvgClone(clone, options);
 
   const serialized = new XMLSerializer().serializeToString(clone);
   const blob = new Blob([serialized], { type: "image/svg+xml;charset=utf-8" });
@@ -230,6 +362,28 @@ async function captureWorkspacePngDataUrl(svg: SVGSVGElement, scale = 2): Promis
     }
     context.setTransform(scale, 0, 0, scale, 0, 0);
     context.drawImage(image, 0, 0, width, height);
+
+    if (options.hueColor === GRAYSCALE_COLOR_TOKEN) {
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = canvas.width;
+      tempCanvas.height = canvas.height;
+      const tempContext = tempCanvas.getContext("2d");
+      if (!tempContext) {
+        throw new Error("Unable to create grayscale processing context.");
+      }
+      tempContext.drawImage(canvas, 0, 0);
+
+      context.clearRect(0, 0, width, height);
+      context.filter = "grayscale(1)";
+      context.drawImage(tempCanvas, 0, 0, width, height);
+      context.filter = "none";
+    } else if (options.hueColor) {
+      context.globalCompositeOperation = "hue";
+      context.fillStyle = options.hueColor;
+      context.fillRect(0, 0, width, height);
+      context.globalCompositeOperation = "source-over";
+    }
+
     return canvas.toDataURL("image/png");
   } finally {
     URL.revokeObjectURL(url);
@@ -242,9 +396,7 @@ async function downloadLevelsPdf(levels: LevelRender[], metrics: ReturnType<type
   const textFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   const pageWidth = 612;
   const pageHeight = 792;
-  const blue = rgb(0.38, 0.56, 0.78);
   const navy = rgb(0.13, 0.22, 0.37);
-  const white = rgb(1, 1, 1);
   const pages = Math.max(1, Math.ceil(levels.length / 2));
 
   for (let pageIndex = 0; pageIndex < pages; pageIndex += 1) {
@@ -302,20 +454,12 @@ async function downloadLevelsPdf(levels: LevelRender[], metrics: ReturnType<type
     ];
 
     for (const slot of slots) {
-      page.drawRectangle({
-        x: left,
-        y: slot.y,
-        width: right - left,
-        height: sectionHeight,
-        color: blue,
-      });
-
       if (!slot.level) {
         continue;
       }
 
       const label = slot.level.name.toUpperCase();
-      const labelSize = 26;
+      const labelSize = 22;
       const labelWidth = textFont.widthOfTextAtSize(label, labelSize);
       const labelCenterY = slot.y + sectionHeight / 2;
       page.drawText(label, {
@@ -324,7 +468,7 @@ async function downloadLevelsPdf(levels: LevelRender[], metrics: ReturnType<type
         size: labelSize,
         rotate: degrees(90),
         font: textFont,
-        color: white,
+        color: navy,
       });
 
       const image = await pdfDoc.embedPng(slot.level.pngDataUrl);
@@ -792,6 +936,11 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
   const [utilityDrag, setUtilityDrag] = useState<UtilityDragState | null>(null);
   const [utilityLabelModalState, setUtilityLabelModalState] = useState<UtilityLabelModalState | null>(null);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [isExportPdfModalOpen, setIsExportPdfModalOpen] = useState(false);
+  const [exportPreviewImageUrl, setExportPreviewImageUrl] = useState<string | null>(null);
+  const [exportPreviewLoading, setExportPreviewLoading] = useState(false);
+  const exportPreviewRequestRef = useRef(0);
+  const exportPreviewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const windowDefaultWidthFt = clampPositiveInt(Number(state.project.metadata.windowDefaultWidthFt ?? 3), 3);
@@ -971,7 +1120,7 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
     />
   );
 
-  const exportPdf = async () => {
+  const exportPdf = async (options: ExportPdfStyleOptions) => {
     if (isExportingPdf || state.project.floors.length === 0) {
       return;
     }
@@ -1018,7 +1167,7 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
           }
         }
 
-        const pngDataUrl = await captureWorkspacePngDataUrl(workspaceSvg, 2);
+        const pngDataUrl = await captureWorkspacePngDataUrl(workspaceSvg, options, 2);
         levelRenders.push({ name: floor.name, pngDataUrl });
       }
 
@@ -1033,6 +1182,106 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
       setIsExportingPdf(false);
     }
   };
+
+  const handleExportPdfRequest = (options: ExportPdfStyleOptions) => {
+    void exportPdf(options);
+  };
+
+  const frameSceneAndOpenExportModal = async () => {
+    if (isExportingPdf || state.project.floors.length === 0) {
+      return;
+    }
+
+    const workspaceSvg = document.querySelector("svg.workspace") as SVGSVGElement | null;
+    if (!workspaceSvg || workspaceSvg.clientWidth <= 0 || workspaceSvg.clientHeight <= 0) {
+      setIsExportPdfModalOpen(true);
+      return;
+    }
+
+    const activeFloor =
+      state.project.floors.find((floor) => floor.id === state.project.activeFloorId) ??
+      state.project.floors[0] ??
+      null;
+
+    if (activeFloor) {
+      const bounds = getFloorFrameBounds(activeFloor);
+      if (bounds) {
+        const framed = frameCameraForBounds(bounds, workspaceSvg.clientWidth, workspaceSvg.clientHeight);
+        dispatch({ type: "SET_CAMERA", camera: framed });
+        await waitForPaint();
+      }
+    }
+
+    setIsExportPdfModalOpen(true);
+  };
+
+  const refreshExportPreview = useCallback((options: ExportPdfStyleOptions) => {
+    if (!isExportPdfModalOpen) {
+      return;
+    }
+
+    const workspaceSvg = document.querySelector("svg.workspace") as SVGSVGElement | null;
+    if (!workspaceSvg || workspaceSvg.clientWidth <= 0 || workspaceSvg.clientHeight <= 0) {
+      setExportPreviewImageUrl(null);
+      setExportPreviewLoading(false);
+      return;
+    }
+
+    if (exportPreviewDebounceRef.current) {
+      clearTimeout(exportPreviewDebounceRef.current);
+    }
+
+    exportPreviewDebounceRef.current = setTimeout(() => {
+      const requestId = exportPreviewRequestRef.current + 1;
+      exportPreviewRequestRef.current = requestId;
+      setExportPreviewLoading(true);
+
+      void (async () => {
+        try {
+          const previewDataUrl = await captureWorkspacePngDataUrl(workspaceSvg, options, 1);
+          if (exportPreviewRequestRef.current !== requestId) {
+            return;
+          }
+          setExportPreviewImageUrl(previewDataUrl);
+        } catch {
+          if (exportPreviewRequestRef.current !== requestId) {
+            return;
+          }
+          setExportPreviewImageUrl(null);
+        } finally {
+          if (exportPreviewRequestRef.current === requestId) {
+            setExportPreviewLoading(false);
+          }
+        }
+      })();
+    }, 120);
+  }, [isExportPdfModalOpen]);
+
+  useEffect(() => {
+    if (!isExportPdfModalOpen) {
+      exportPreviewRequestRef.current += 1;
+      if (exportPreviewDebounceRef.current) {
+        clearTimeout(exportPreviewDebounceRef.current);
+        exportPreviewDebounceRef.current = null;
+      }
+      setExportPreviewLoading(false);
+      return;
+    }
+
+    const workspaceSvg = document.querySelector("svg.workspace") as SVGSVGElement | null;
+    if (!workspaceSvg) {
+      setExportPreviewImageUrl(null);
+      setExportPreviewLoading(false);
+    }
+  }, [isExportPdfModalOpen]);
+
+  useEffect(() => {
+    return () => {
+      if (exportPreviewDebounceRef.current) {
+        clearTimeout(exportPreviewDebounceRef.current);
+      }
+    };
+  }, []);
 
   const saveProjectToDevice = () => {
     const json = exportProjectAsJson(state.project);
@@ -1177,7 +1426,7 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
             className="export-pdf-btn"
             type="button"
             onClick={() => {
-              void exportPdf();
+              void frameSceneAndOpenExportModal();
             }}
             title="Export PDF"
             aria-label="Export PDF"
@@ -1212,6 +1461,21 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
 
       {typeof document !== "undefined" ? createPortal(windowToolModal, document.body) : windowToolModal}
       {typeof document !== "undefined" ? createPortal(utilityLabelModal, document.body) : utilityLabelModal}
+      {typeof document !== "undefined" ? createPortal(
+        <ExportPdfModal
+          isOpen={isExportPdfModalOpen}
+          isExporting={isExportingPdf}
+          previewImageUrl={exportPreviewImageUrl}
+          previewLoading={exportPreviewLoading}
+          onCancel={() => setIsExportPdfModalOpen(false)}
+          onOptionsChange={refreshExportPreview}
+          onExport={(options) => {
+            void handleExportPdfRequest(options);
+            setIsExportPdfModalOpen(false);
+          }}
+        />,
+        document.body,
+      ) : null}
 
       {utilityGhost && typeof document !== "undefined" ? createPortal(utilityGhost, document.body) : null}
     </aside>
