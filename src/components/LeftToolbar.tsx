@@ -247,9 +247,14 @@ function recolorAllText(svg: SVGSVGElement, fill: string, stroke: string): void 
     if (stroke === "none") {
       text.setAttribute("stroke", "none");
       text.setAttribute("stroke-width", "0");
+      text.style.setProperty("stroke", "none", "important");
+      text.style.setProperty("stroke-width", "0", "important");
+      text.style.setProperty("paint-order", "normal", "important");
     } else {
       text.setAttribute("stroke", stroke);
+      text.style.setProperty("stroke", stroke, "important");
     }
+    text.style.setProperty("fill", fill, "important");
   }
 }
 
@@ -306,7 +311,7 @@ function applyExportVisibilityOptions(svg: SVGSVGElement, options: ExportPdfStyl
   }
 
   if (options.hideLabels) {
-    removeElementsBySelector(svg, "text");
+    removeElementsBySelector(svg, "text:not(.dim-label)");
     removeElementsBySelector(svg, ".ceiling-height-box");
   }
 

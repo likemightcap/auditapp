@@ -943,10 +943,6 @@ function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor
 
   const overlayWidth = Math.max(entity.width, 0.4);
   const overlayHeight = Math.max(entity.height, 0.4);
-  if (overlayWidth < 8 || overlayHeight < 3) {
-    return null;
-  }
-
   if (Boolean(entity.metadata.unconditioned)) {
     return null;
   }
@@ -962,10 +958,25 @@ function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor
 
   const xCenter = anchor?.x ?? entity.width / 2;
   const yCenter = anchor?.y ?? entity.height / 2;
-  const inset = 1.2;
+  const inset = Math.min(1.2, Math.max(0.55, Math.min(overlayWidth, overlayHeight) * 0.18));
   const isCathedralVertical = ceilingType === "cathedral";
   const isCathedralHorizontal = ceilingType === "cathedral-horizontal";
   const isSlopedHorizontal = ceilingType === "sloped-horizontal";
+  const isSlopedVertical = ceilingType === "sloped";
+  const isSlopedOrCathedral =
+    isCathedralVertical || isCathedralHorizontal || isSlopedHorizontal || isSlopedVertical;
+
+  // Keep standard overlays hidden on tiny rectangles, but preserve sloped/cathedral shape cues.
+  if (!isSlopedOrCathedral && (overlayWidth < 8 || overlayHeight < 3)) {
+    return null;
+  }
+
+  const hideSlopedOrCathedralNumbers = isSlopedOrCathedral && (overlayWidth < 8 || overlayHeight < 3);
+  const shouldScaleSlopedOrCathedralNumbers =
+    isSlopedOrCathedral && !hideSlopedOrCathedralNumbers && (overlayWidth < 11 || overlayHeight < 4.8);
+  const numberScale = shouldScaleSlopedOrCathedralNumbers ? 0.76 : 1;
+  const lowLabelFontSize = 0.82 * numberScale;
+  const valueLabelFontSize = 0.94 * numberScale;
 
   if (ceilingType === "standard") {
     const heightValueY = yCenter + 0.28;
@@ -1020,20 +1031,40 @@ function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor
             fill={LINEAR_MARKER_COLOR}
           />
 
-          <text x={(inset + leftArrowX) / 2 - 0.1} y={yCenter - 0.65} textAnchor="middle" className="ceiling-label">
-            {fmtFeet(lowHeight)}
-          </text>
-          <text
-            x={(entity.width - inset + rightArrowX) / 2 + 0.1}
-            y={yCenter - 0.65}
-            textAnchor="middle"
-            className="ceiling-label"
-          >
-            {fmtFeet(lowHeight)}
-          </text>
-          <text x={xCenter} y={yCenter + 0.74} textAnchor="middle" className="ceiling-value cathedral-value">
-            {fmtFeet(highHeight)}
-          </text>
+          {!hideSlopedOrCathedralNumbers && (
+            <>
+              <text
+                x={(inset + leftArrowX) / 2 - 0.1}
+                y={yCenter - 0.65}
+                textAnchor="middle"
+                className="ceiling-label"
+                fontSize={lowLabelFontSize}
+                style={{ fontSize: `${lowLabelFontSize}px` }}
+              >
+                {fmtFeet(lowHeight)}
+              </text>
+              <text
+                x={(entity.width - inset + rightArrowX) / 2 + 0.1}
+                y={yCenter - 0.65}
+                textAnchor="middle"
+                className="ceiling-label"
+                fontSize={lowLabelFontSize}
+                style={{ fontSize: `${lowLabelFontSize}px` }}
+              >
+                {fmtFeet(lowHeight)}
+              </text>
+              <text
+                x={xCenter}
+                y={yCenter + 0.74}
+                textAnchor="middle"
+                className="ceiling-value cathedral-value"
+                fontSize={valueLabelFontSize}
+                style={{ fontSize: `${valueLabelFontSize}px` }}
+              >
+                {fmtFeet(highHeight)}
+              </text>
+            </>
+          )}
         </g>
       );
     }
@@ -1055,20 +1086,40 @@ function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor
           fill={LINEAR_MARKER_COLOR}
         />
 
-        <text x={xCenter + 1.05} y={(inset + topArrowY) / 2 + 0.2} textAnchor="start" className="ceiling-label">
-          {fmtFeet(lowHeight)}
-        </text>
-        <text
-          x={xCenter + 1.05}
-          y={(entity.height - inset + bottomArrowY) / 2 + 0.25}
-          textAnchor="start"
-          className="ceiling-label"
-        >
-          {fmtFeet(lowHeight)}
-        </text>
-        <text x={xCenter} y={yCenter + 0.74} textAnchor="middle" className="ceiling-value cathedral-value">
-          {fmtFeet(highHeight)}
-        </text>
+        {!hideSlopedOrCathedralNumbers && (
+          <>
+            <text
+              x={xCenter + 1.05}
+              y={(inset + topArrowY) / 2 + 0.2}
+              textAnchor="start"
+              className="ceiling-label"
+              fontSize={lowLabelFontSize}
+              style={{ fontSize: `${lowLabelFontSize}px` }}
+            >
+              {fmtFeet(lowHeight)}
+            </text>
+            <text
+              x={xCenter + 1.05}
+              y={(entity.height - inset + bottomArrowY) / 2 + 0.25}
+              textAnchor="start"
+              className="ceiling-label"
+              fontSize={lowLabelFontSize}
+              style={{ fontSize: `${lowLabelFontSize}px` }}
+            >
+              {fmtFeet(lowHeight)}
+            </text>
+            <text
+              x={xCenter}
+              y={yCenter + 0.74}
+              textAnchor="middle"
+              className="ceiling-value cathedral-value"
+              fontSize={valueLabelFontSize}
+              style={{ fontSize: `${valueLabelFontSize}px` }}
+            >
+              {fmtFeet(highHeight)}
+            </text>
+          </>
+        )}
       </g>
     );
   }
@@ -1076,20 +1127,42 @@ function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor
   if (isSlopedHorizontal) {
     const arrowSize = 0.5;
     const lineStartX = inset + 0.8;
-    const lineEndX = entity.width - inset;
+    const lineEndX = Math.max(lineStartX + 1.2, entity.width - inset - 0.8);
     return (
       <g className="ceiling-overlay" pointerEvents="none">
         <line x1={lineStartX} y1={yCenter} x2={lineEndX} y2={yCenter} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
         <polygon
-          points={`${lineStartX},${yCenter - arrowSize} ${lineStartX},${yCenter + arrowSize} ${inset},${yCenter}`}
+          points={`${lineStartX + arrowSize},${yCenter - arrowSize} ${lineStartX + arrowSize},${yCenter + arrowSize} ${lineStartX - arrowSize},${yCenter}`}
           fill={LINEAR_MARKER_COLOR}
         />
-        <text x={lineStartX + 0.55} y={yCenter + 0.88} textAnchor="start" className="ceiling-value cathedral-value">
-          {fmtFeet(highHeight)}
-        </text>
-        <text x={lineEndX - 0.05} y={yCenter + 0.88} textAnchor="end" className="ceiling-value cathedral-value">
-          {fmtFeet(lowHeight)}
-        </text>
+        <polygon
+          points={`${lineEndX - arrowSize},${yCenter - arrowSize} ${lineEndX - arrowSize},${yCenter + arrowSize} ${lineEndX + arrowSize},${yCenter}`}
+          fill={LINEAR_MARKER_COLOR}
+        />
+        {!hideSlopedOrCathedralNumbers && (
+          <>
+            <text
+              x={lineStartX + 0.55}
+              y={yCenter + 0.88}
+              textAnchor="start"
+              className="ceiling-value cathedral-value"
+              fontSize={valueLabelFontSize}
+              style={{ fontSize: `${valueLabelFontSize}px` }}
+            >
+              {fmtFeet(highHeight)}
+            </text>
+            <text
+              x={lineEndX - 0.05}
+              y={yCenter + 0.88}
+              textAnchor="end"
+              className="ceiling-value cathedral-value"
+              fontSize={valueLabelFontSize}
+              style={{ fontSize: `${valueLabelFontSize}px` }}
+            >
+              {fmtFeet(lowHeight)}
+            </text>
+          </>
+        )}
       </g>
     );
   }
@@ -1101,24 +1174,33 @@ function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor
     <g className="ceiling-overlay" pointerEvents="none">
       <line x1={xCenter} y1={lineBottomY} x2={xCenter} y2={lineTopY} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
       <polygon points={`${xCenter - arrowSize},${lineTopY + 0.8} ${xCenter + arrowSize},${lineTopY + 0.8} ${xCenter},${lineTopY}`} fill={LINEAR_MARKER_COLOR} />
-      <text
-        x={xCenter - 0.62}
-        y={lineTopY + 0.85}
-        textAnchor="middle"
-        className="ceiling-value cathedral-value"
-        transform={`rotate(-90 ${xCenter - 0.62} ${lineTopY + 0.85})`}
-      >
-        {fmtFeet(highHeight)}
-      </text>
-      <text
-        x={xCenter - 0.62}
-        y={lineBottomY - 0.1}
-        textAnchor="middle"
-        className="ceiling-value cathedral-value"
-        transform={`rotate(-90 ${xCenter - 0.62} ${lineBottomY - 0.1})`}
-      >
-        {fmtFeet(lowHeight)}
-      </text>
+      <polygon points={`${xCenter - arrowSize},${lineBottomY - 0.8} ${xCenter + arrowSize},${lineBottomY - 0.8} ${xCenter},${lineBottomY}`} fill={LINEAR_MARKER_COLOR} />
+      {!hideSlopedOrCathedralNumbers && (
+        <>
+          <text
+            x={xCenter - 0.62}
+            y={lineTopY + 0.85}
+            textAnchor="middle"
+            className="ceiling-value cathedral-value"
+            transform={`rotate(-90 ${xCenter - 0.62} ${lineTopY + 0.85})`}
+            fontSize={valueLabelFontSize}
+            style={{ fontSize: `${valueLabelFontSize}px` }}
+          >
+            {fmtFeet(highHeight)}
+          </text>
+          <text
+            x={xCenter - 0.62}
+            y={lineBottomY - 0.1}
+            textAnchor="middle"
+            className="ceiling-value cathedral-value"
+            transform={`rotate(-90 ${xCenter - 0.62} ${lineBottomY - 0.1})`}
+            fontSize={valueLabelFontSize}
+            style={{ fontSize: `${valueLabelFontSize}px` }}
+          >
+            {fmtFeet(lowHeight)}
+          </text>
+        </>
+      )}
     </g>
   );
 }
