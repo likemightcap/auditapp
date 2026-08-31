@@ -92,9 +92,10 @@ function fmtFeet(value: number): string {
 
 const WINDOW_FILL_THICKNESS = 0.56;
 const WINDOW_SELECTION_PADDING = 0.12;
-const WINDOW_ANCHOR_WIDTH = 0.48;
-const WINDOW_ANCHOR_HEIGHT = 1.16;
 const WINDOW_HANDLE_HIT_SLOP = 0.76;
+const WINDOW_RESIZE_ANCHOR_WIDTH = 0.62;
+const WINDOW_RESIZE_ANCHOR_HEIGHT = 1.34;
+const WINDOW_RESIZE_HANDLE_OUTSET_ALONG_LINE = 2.4;
 const WINDOW_LABEL_OFFSET = 1.02;
 const LINEAR_MARKER_COLOR = "#edf5ff";
 const RESIZE_HINT_COLOR = "#7de8ff";
@@ -3927,6 +3928,18 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
     return candidate;
   }, [floor.entities, state.selection]);
 
+  const selectedWindowEntity = useMemo(() => {
+    const selection = state.selection;
+    if (selection.kind !== "entity") {
+      return null;
+    }
+    const candidate = floor.entities.find((entity) => entity.id === selection.id);
+    if (!candidate || (candidate.type !== "window" && !isSlidingDoor(candidate))) {
+      return null;
+    }
+    return candidate;
+  }, [floor.entities, state.selection]);
+
   const rectangleGuideGroups = useMemo(() => {
     const rectangles: RectWithId[] = floor.entities
       .filter((entity) => entity.type === "rectangle")
@@ -7302,20 +7315,6 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
           {renderedNonTextEntities.map((entity) => {
             const isOpeningPreviewEntity = entity.id === OPENING_PLACEMENT_PREVIEW_ID;
             const selected = state.selection.kind === "entity" && state.selection.id === entity.id;
-            const isActiveWindowResize =
-              interactionRef.current.type === "resize-window" && interactionRef.current.targetId === entity.id;
-            const showWindowStartHint =
-              selected &&
-              (
-                (resizeHint?.entityId === entity.id && resizeHint.zone === "window-start") ||
-                (isActiveWindowResize && interactionRef.current.windowHandle === "start")
-              );
-            const showWindowEndHint =
-              selected &&
-              (
-                (resizeHint?.entityId === entity.id && resizeHint.zone === "window-end") ||
-                (isActiveWindowResize && interactionRef.current.windowHandle === "end")
-              );
             const common = {
               transform: `translate(${entity.x} ${entity.y}) rotate(${entity.rotation})`,
             };
@@ -7402,78 +7401,6 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
                               stroke="#ffffff"
                               strokeWidth={0.14}
                             />
-                            {selected && (
-                              <>
-                                <rect
-                                  x={-doorVisualWidth / 2 - WINDOW_ANCHOR_WIDTH / 2 - WINDOW_HANDLE_HIT_SLOP}
-                                  y={-WINDOW_ANCHOR_HEIGHT / 2 - WINDOW_HANDLE_HIT_SLOP}
-                                  width={WINDOW_ANCHOR_WIDTH + WINDOW_HANDLE_HIT_SLOP * 2}
-                                  height={WINDOW_ANCHOR_HEIGHT + WINDOW_HANDLE_HIT_SLOP * 2}
-                                  fill="transparent"
-                                  onPointerEnter={() => setResizeHintZone(entity.id, "window-start")}
-                                  onPointerLeave={() => clearResizeHintZone(entity.id, "window-start")}
-                                  onPointerDown={(event) => startWindowResize(event, entity, "start")}
-                                />
-                                {showWindowStartHint && (
-                                  <rect
-                                    x={-doorVisualWidth / 2 - WINDOW_ANCHOR_WIDTH / 2 - 0.12}
-                                    y={-WINDOW_ANCHOR_HEIGHT / 2 - 0.12}
-                                    width={WINDOW_ANCHOR_WIDTH + 0.24}
-                                    height={WINDOW_ANCHOR_HEIGHT + 0.24}
-                                    rx={0.12}
-                                    fill="rgba(255, 229, 154, 0.26)"
-                                    stroke="#ffe59a"
-                                    strokeWidth={0.08}
-                                    pointerEvents="none"
-                                  />
-                                )}
-                                <rect
-                                  x={-doorVisualWidth / 2 - WINDOW_ANCHOR_WIDTH / 2}
-                                  y={-WINDOW_ANCHOR_HEIGHT / 2}
-                                  width={WINDOW_ANCHOR_WIDTH}
-                                  height={WINDOW_ANCHOR_HEIGHT}
-                                  rx={0.04}
-                                  fill="#ffffff"
-                                  stroke="#ffe59a"
-                                  strokeWidth={0.06}
-                                  pointerEvents="none"
-                                />
-                                <rect
-                                  x={doorVisualWidth / 2 - WINDOW_ANCHOR_WIDTH / 2 - WINDOW_HANDLE_HIT_SLOP}
-                                  y={-WINDOW_ANCHOR_HEIGHT / 2 - WINDOW_HANDLE_HIT_SLOP}
-                                  width={WINDOW_ANCHOR_WIDTH + WINDOW_HANDLE_HIT_SLOP * 2}
-                                  height={WINDOW_ANCHOR_HEIGHT + WINDOW_HANDLE_HIT_SLOP * 2}
-                                  fill="transparent"
-                                  onPointerEnter={() => setResizeHintZone(entity.id, "window-end")}
-                                  onPointerLeave={() => clearResizeHintZone(entity.id, "window-end")}
-                                  onPointerDown={(event) => startWindowResize(event, entity, "end")}
-                                />
-                                {showWindowEndHint && (
-                                  <rect
-                                    x={doorVisualWidth / 2 - WINDOW_ANCHOR_WIDTH / 2 - 0.12}
-                                    y={-WINDOW_ANCHOR_HEIGHT / 2 - 0.12}
-                                    width={WINDOW_ANCHOR_WIDTH + 0.24}
-                                    height={WINDOW_ANCHOR_HEIGHT + 0.24}
-                                    rx={0.12}
-                                    fill="rgba(255, 229, 154, 0.26)"
-                                    stroke="#ffe59a"
-                                    strokeWidth={0.08}
-                                    pointerEvents="none"
-                                  />
-                                )}
-                                <rect
-                                  x={doorVisualWidth / 2 - WINDOW_ANCHOR_WIDTH / 2}
-                                  y={-WINDOW_ANCHOR_HEIGHT / 2}
-                                  width={WINDOW_ANCHOR_WIDTH}
-                                  height={WINDOW_ANCHOR_HEIGHT}
-                                  rx={0.04}
-                                  fill="#ffffff"
-                                  stroke="#ffe59a"
-                                  strokeWidth={0.06}
-                                  pointerEvents="none"
-                                />
-                              </>
-                            )}
                             <text
                               x={0}
                               y={renderedLabelY}
@@ -7607,92 +7534,6 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
                       stroke="#ffffff"
                       strokeWidth={0.22}
                     />
-                    {selected && (
-                      <>
-                        <rect
-                          x={-entity.width / 2 - WINDOW_ANCHOR_WIDTH / 2 - WINDOW_HANDLE_HIT_SLOP}
-                          y={-WINDOW_ANCHOR_HEIGHT / 2 - WINDOW_HANDLE_HIT_SLOP}
-                          width={WINDOW_ANCHOR_WIDTH + WINDOW_HANDLE_HIT_SLOP * 2}
-                          height={WINDOW_ANCHOR_HEIGHT + WINDOW_HANDLE_HIT_SLOP * 2}
-                          fill="transparent"
-                          onPointerEnter={() => setResizeHintZone(entity.id, "window-start")}
-                          onPointerLeave={() => clearResizeHintZone(entity.id, "window-start")}
-                          onPointerDown={(event) => startWindowResize(event, entity, "start")}
-                        />
-                        {showWindowStartHint && (
-                          <rect
-                            x={-entity.width / 2 - WINDOW_ANCHOR_WIDTH / 2 - 0.12}
-                            y={-WINDOW_ANCHOR_HEIGHT / 2 - 0.12}
-                            width={WINDOW_ANCHOR_WIDTH + 0.24}
-                            height={WINDOW_ANCHOR_HEIGHT + 0.24}
-                            rx={0.12}
-                            fill="rgba(255, 229, 154, 0.26)"
-                            stroke="#ffe59a"
-                            strokeWidth={0.08}
-                            pointerEvents="none"
-                          />
-                        )}
-                        <rect
-                          x={-entity.width / 2 - WINDOW_ANCHOR_WIDTH / 2}
-                          y={-WINDOW_ANCHOR_HEIGHT / 2}
-                          width={WINDOW_ANCHOR_WIDTH}
-                          height={WINDOW_ANCHOR_HEIGHT}
-                          rx={0.04}
-                          fill="#ffffff"
-                          stroke="#ffe59a"
-                          strokeWidth={0.06}
-                          onPointerDown={(event) => startWindowResize(event, entity, "start")}
-                          style={{
-                            cursor:
-                              selectedOpeningEdge === "left" || selectedOpeningEdge === "right"
-                                ? "ns-resize"
-                                : "ew-resize",
-                          }}
-                          pointerEvents="none"
-                        />
-                        <rect
-                          x={entity.width / 2 - WINDOW_ANCHOR_WIDTH / 2 - WINDOW_HANDLE_HIT_SLOP}
-                          y={-WINDOW_ANCHOR_HEIGHT / 2 - WINDOW_HANDLE_HIT_SLOP}
-                          width={WINDOW_ANCHOR_WIDTH + WINDOW_HANDLE_HIT_SLOP * 2}
-                          height={WINDOW_ANCHOR_HEIGHT + WINDOW_HANDLE_HIT_SLOP * 2}
-                          fill="transparent"
-                          onPointerEnter={() => setResizeHintZone(entity.id, "window-end")}
-                          onPointerLeave={() => clearResizeHintZone(entity.id, "window-end")}
-                          onPointerDown={(event) => startWindowResize(event, entity, "end")}
-                        />
-                        {showWindowEndHint && (
-                          <rect
-                            x={entity.width / 2 - WINDOW_ANCHOR_WIDTH / 2 - 0.12}
-                            y={-WINDOW_ANCHOR_HEIGHT / 2 - 0.12}
-                            width={WINDOW_ANCHOR_WIDTH + 0.24}
-                            height={WINDOW_ANCHOR_HEIGHT + 0.24}
-                            rx={0.12}
-                            fill="rgba(255, 229, 154, 0.26)"
-                            stroke="#ffe59a"
-                            strokeWidth={0.08}
-                            pointerEvents="none"
-                          />
-                        )}
-                        <rect
-                          x={entity.width / 2 - WINDOW_ANCHOR_WIDTH / 2}
-                          y={-WINDOW_ANCHOR_HEIGHT / 2}
-                          width={WINDOW_ANCHOR_WIDTH}
-                          height={WINDOW_ANCHOR_HEIGHT}
-                          rx={0.04}
-                          fill="#ffffff"
-                          stroke="#ffe59a"
-                          strokeWidth={0.06}
-                          onPointerDown={(event) => startWindowResize(event, entity, "end")}
-                          style={{
-                            cursor:
-                              selectedOpeningEdge === "left" || selectedOpeningEdge === "right"
-                                ? "ns-resize"
-                                : "ew-resize",
-                          }}
-                          pointerEvents="none"
-                        />
-                      </>
-                    )}
                   </g>
                 ) : entity.type === "skylight" ? (
                   <g>
@@ -8590,6 +8431,99 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
                     />
                   </g>
                 ))}
+              </g>
+            );
+          })()}
+
+          {selectedWindowEntity && (() => {
+            const startHandleX = selectedWindowEntity.x - selectedWindowEntity.width / 2 - WINDOW_RESIZE_HANDLE_OUTSET_ALONG_LINE;
+            const endHandleX = selectedWindowEntity.x + selectedWindowEntity.width / 2 + WINDOW_RESIZE_HANDLE_OUTSET_ALONG_LINE;
+            const handleCursor = selectedOpeningEdge === "left" || selectedOpeningEdge === "right" ? "ns-resize" : "ew-resize";
+            const isActiveWindowResize =
+              interactionRef.current.type === "resize-window" && interactionRef.current.targetId === selectedWindowEntity.id;
+            const showWindowStartHint =
+              (resizeHint?.entityId === selectedWindowEntity.id && resizeHint.zone === "window-start") ||
+              (isActiveWindowResize && interactionRef.current.windowHandle === "start");
+            const showWindowEndHint =
+              (resizeHint?.entityId === selectedWindowEntity.id && resizeHint.zone === "window-end") ||
+              (isActiveWindowResize && interactionRef.current.windowHandle === "end");
+
+            return (
+              <g
+                className="rect-resize-controls"
+                transform={`translate(${selectedWindowEntity.x} ${selectedWindowEntity.y}) rotate(${selectedWindowEntity.rotation})`}
+              >
+                <rect
+                  x={startHandleX - selectedWindowEntity.x - WINDOW_RESIZE_ANCHOR_WIDTH / 2 - WINDOW_HANDLE_HIT_SLOP}
+                  y={-WINDOW_RESIZE_ANCHOR_HEIGHT / 2 - WINDOW_HANDLE_HIT_SLOP}
+                  width={WINDOW_RESIZE_ANCHOR_WIDTH + WINDOW_HANDLE_HIT_SLOP * 2}
+                  height={WINDOW_RESIZE_ANCHOR_HEIGHT + WINDOW_HANDLE_HIT_SLOP * 2}
+                  fill="transparent"
+                  onPointerEnter={() => setResizeHintZone(selectedWindowEntity.id, "window-start")}
+                  onPointerLeave={() => clearResizeHintZone(selectedWindowEntity.id, "window-start")}
+                  onPointerDown={(event) => startWindowResize(event, selectedWindowEntity, "start")}
+                  style={{ cursor: handleCursor }}
+                />
+                {showWindowStartHint && (
+                  <rect
+                    x={startHandleX - selectedWindowEntity.x - WINDOW_RESIZE_ANCHOR_WIDTH / 2 - 0.12}
+                    y={-WINDOW_RESIZE_ANCHOR_HEIGHT / 2 - 0.12}
+                    width={WINDOW_RESIZE_ANCHOR_WIDTH + 0.24}
+                    height={WINDOW_RESIZE_ANCHOR_HEIGHT + 0.24}
+                    rx={0.12}
+                    fill="rgba(255, 229, 154, 0.26)"
+                    stroke="#ffe59a"
+                    strokeWidth={0.08}
+                    pointerEvents="none"
+                  />
+                )}
+                <rect
+                  x={startHandleX - selectedWindowEntity.x - WINDOW_RESIZE_ANCHOR_WIDTH / 2}
+                  y={-WINDOW_RESIZE_ANCHOR_HEIGHT / 2}
+                  width={WINDOW_RESIZE_ANCHOR_WIDTH}
+                  height={WINDOW_RESIZE_ANCHOR_HEIGHT}
+                  rx={0.04}
+                  fill="#ffe59a"
+                  stroke="#ffe59a"
+                  strokeWidth={0.06}
+                  pointerEvents="none"
+                />
+
+                <rect
+                  x={endHandleX - selectedWindowEntity.x - WINDOW_RESIZE_ANCHOR_WIDTH / 2 - WINDOW_HANDLE_HIT_SLOP}
+                  y={-WINDOW_RESIZE_ANCHOR_HEIGHT / 2 - WINDOW_HANDLE_HIT_SLOP}
+                  width={WINDOW_RESIZE_ANCHOR_WIDTH + WINDOW_HANDLE_HIT_SLOP * 2}
+                  height={WINDOW_RESIZE_ANCHOR_HEIGHT + WINDOW_HANDLE_HIT_SLOP * 2}
+                  fill="transparent"
+                  onPointerEnter={() => setResizeHintZone(selectedWindowEntity.id, "window-end")}
+                  onPointerLeave={() => clearResizeHintZone(selectedWindowEntity.id, "window-end")}
+                  onPointerDown={(event) => startWindowResize(event, selectedWindowEntity, "end")}
+                  style={{ cursor: handleCursor }}
+                />
+                {showWindowEndHint && (
+                  <rect
+                    x={endHandleX - selectedWindowEntity.x - WINDOW_RESIZE_ANCHOR_WIDTH / 2 - 0.12}
+                    y={-WINDOW_RESIZE_ANCHOR_HEIGHT / 2 - 0.12}
+                    width={WINDOW_RESIZE_ANCHOR_WIDTH + 0.24}
+                    height={WINDOW_RESIZE_ANCHOR_HEIGHT + 0.24}
+                    rx={0.12}
+                    fill="rgba(255, 229, 154, 0.26)"
+                    stroke="#ffe59a"
+                    strokeWidth={0.08}
+                    pointerEvents="none"
+                  />
+                )}
+                <rect
+                  x={endHandleX - selectedWindowEntity.x - WINDOW_RESIZE_ANCHOR_WIDTH / 2}
+                  y={-WINDOW_RESIZE_ANCHOR_HEIGHT / 2}
+                  width={WINDOW_RESIZE_ANCHOR_WIDTH}
+                  height={WINDOW_RESIZE_ANCHOR_HEIGHT}
+                  rx={0.04}
+                  fill="#ffe59a"
+                  stroke="#ffe59a"
+                  strokeWidth={0.06}
+                  pointerEvents="none"
+                />
               </g>
             );
           })()}
