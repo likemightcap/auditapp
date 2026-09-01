@@ -13,6 +13,7 @@ export interface LevelModalSubmit {
   floorPreset: FloorPreset;
   unconditioned: boolean;
   copyFromFloorId?: string;
+  projectName?: string;
 }
 
 interface LevelModalProps {
@@ -23,6 +24,8 @@ interface LevelModalProps {
   existingFloors: FloorData[];
   initialPreset: FloorPreset;
   initialUnconditioned: boolean;
+  showProjectNameField?: boolean;
+  initialProjectName?: string;
   showDelete: boolean;
   onCancel: () => void;
   onSubmit: (payload: LevelModalSubmit) => void;
@@ -37,6 +40,8 @@ export function LevelModal({
   existingFloors,
   initialPreset,
   initialUnconditioned,
+  showProjectNameField = false,
+  initialProjectName = "",
   showDelete,
   onCancel,
   onSubmit,
@@ -46,6 +51,7 @@ export function LevelModal({
   const [unconditioned, setUnconditioned] = useState(false);
   const [copyEnabled, setCopyEnabled] = useState(true);
   const [copyFromFloorId, setCopyFromFloorId] = useState("");
+  const [projectName, setProjectName] = useState("");
 
   const copySourceFloors = useMemo(
     () =>
@@ -90,11 +96,12 @@ export function LevelModal({
     }
     setPreset(initialPreset);
     setUnconditioned(initialUnconditioned);
+    setProjectName(initialProjectName);
 
     const firstExistingFloorId = getDefaultCopyFromFloorId(initialPreset);
     setCopyEnabled(firstExistingFloorId.length > 0);
     setCopyFromFloorId(firstExistingFloorId);
-  }, [existingFloors, initialPreset, initialUnconditioned, isOpen]);
+  }, [existingFloors, initialPreset, initialProjectName, initialUnconditioned, isOpen]);
 
   useEffect(() => {
     if (!isOpen || mode !== "create") {
@@ -142,12 +149,26 @@ export function LevelModal({
     floorPreset: preset,
     unconditioned: isAttic ? true : canSetUnconditioned ? unconditioned : false,
     copyFromFloorId: mode === "create" && copyEnabled ? copyFromFloorId || undefined : undefined,
+    projectName: showProjectNameField ? projectName.trim() : undefined,
   };
 
   return (
     <div className="modal-backdrop" onPointerDown={onCancel}>
       <section className="text-modal" onPointerDown={(event) => event.stopPropagation()}>
         <h2>{title}</h2>
+
+        {mode === "create" && showProjectNameField && (
+          <div className="modal-row">
+            <label htmlFor="projectName">PROJECT NAME:</label>
+            <input
+              id="projectName"
+              className="text-content-input"
+              value={projectName}
+              onChange={(event) => setProjectName(event.target.value)}
+              placeholder="Enter project name"
+            />
+          </div>
+        )}
 
         <div className="modal-row">
           <label>PRESET:</label>

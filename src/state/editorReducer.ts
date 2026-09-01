@@ -40,7 +40,7 @@ export function createInitialProject(): Project {
     projectId: uid("project"),
     projectName: "New Assessment",
     address: "",
-    orientation: "N",
+    orientation: "S",
     averageCeilingHeightFt: 9,
     floors: [],
     activeFloorId: "",

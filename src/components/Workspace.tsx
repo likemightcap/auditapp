@@ -19,6 +19,7 @@ import moveIcon from "../../assets/svgs/move-icon.svg";
 import editIcon from "../../assets/svgs/edit-icon.svg";
 import lockIcon from "../../assets/svgs/lock-icon.svg";
 import floorplanIcon from "../../assets/svgs/floorplan-icon.svg";
+import compassIcon from "../../assets/svgs/compass-icon.svg";
 import doorToolIcon from "../../assets/building-icons/door.png";
 import doubleDoorToolIcon from "../../assets/building-icons/double-door.png";
 import slidingGlassToolIcon from "../../assets/building-icons/sliding-glass.png";
@@ -96,17 +97,31 @@ const WINDOW_HANDLE_HIT_SLOP = 0.76;
 const WINDOW_RESIZE_ANCHOR_WIDTH = 0.62;
 const WINDOW_RESIZE_ANCHOR_HEIGHT = 1.34;
 const WINDOW_RESIZE_HANDLE_OUTSET_ALONG_LINE = 2.4;
+const RECT_RESIZE_ANCHOR_THICKNESS = 0.62;
+const RECT_RESIZE_HANDLE_OUTSET = 2.4;
+const RECT_RESIZE_HANDLE_HIT_SLOP = 0.76;
+const RECT_RESIZE_CORNER_ANCHOR_RADIUS = 0.32;
 const WINDOW_LABEL_OFFSET = 1.02;
 const LINEAR_MARKER_COLOR = "#edf5ff";
-const RESIZE_HINT_COLOR = "#7de8ff";
 const SMART_GUIDE_HIGHLIGHT_COLOR = "#67f5ff";
 const OPENING_SIZE_LABEL_COLOR = "#1c3358";
 const ORIENTATION_ORDER: Orientation[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+const ORIENTATION_POINT_POSITIONS: Array<{ direction: Orientation; xPercent: number; yPercent: number }> = [
+  { direction: "N", xPercent: 50, yPercent: 8 },
+  { direction: "NE", xPercent: 76, yPercent: 20 },
+  { direction: "E", xPercent: 89, yPercent: 49 },
+  { direction: "SE", xPercent: 76, yPercent: 78 },
+  { direction: "S", xPercent: 50, yPercent: 91 },
+  { direction: "SW", xPercent: 24, yPercent: 78 },
+  { direction: "W", xPercent: 11, yPercent: 49 },
+  { direction: "NW", xPercent: 24, yPercent: 20 },
+];
 const OPENING_SIZE_LABEL_FONT_SIZE = 0.92;
 const OPENING_LABEL_UNDER_SELECTED_PADDING = 0.24;
 const WINDOW_BOTTOM_LABEL_EXTRA_PADDING = 0.12;
 const RECTANGLE_LABEL_DEFAULT_FONT_SIZE = 1.05;
 const RECTANGLE_LABEL_MIN_FONT_SIZE = 0.52;
+const RECTANGLE_COMPACT_LAYOUT_MAX_HEIGHT = 8;
 const DOOR_FILL_COLOR = "#ffaa00";
 const OPENING_ACCENT_COLOR = "#00dbff";
 const SINGLE_DOOR_DEFAULT_WIDTH = 3;
@@ -338,6 +353,102 @@ function bumpOutPath(points: Point[]): string {
   return points
     .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x} ${point.y}`)
     .join(" ");
+}
+
+function polygonAreaSquareFeet(points: Point[]): number {
+  if (points.length < 3) {
+    return 0;
+  }
+
+  let areaTwice = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    const nextIndex = (index + 1) % points.length;
+    const current = points[index];
+    const next = points[nextIndex];
+    areaTwice += current.x * next.y - next.x * current.y;
+  }
+
+  return Math.abs(areaTwice) / 2;
+}
+
+function clipPolygonToRect(polygon: Point[], rect: RectBounds): Point[] {
+  const left = rect.x;
+  const right = rect.x + rect.width;
+  const top = rect.y;
+  const bottom = rect.y + rect.height;
+
+  const clipAgainstBoundary = (
+    input: Point[],
+    isInside: (point: Point) => boolean,
+    intersect: (start: Point, end: Point) => Point,
+  ): Point[] => {
+    if (input.length === 0) {
+      return input;
+    }
+
+    const output: Point[] = [];
+    let previous = input[input.length - 1];
+    let previousInside = isInside(previous);
+
+    for (const current of input) {
+      const currentInside = isInside(current);
+
+      if (currentInside) {
+        if (!previousInside) {
+          output.push(intersect(previous, current));
+        }
+        output.push(current);
+      } else if (previousInside) {
+        output.push(intersect(previous, current));
+      }
+
+      previous = current;
+      previousInside = currentInside;
+    }
+
+    return output;
+  };
+
+  const intersectAtX = (x: number, start: Point, end: Point): Point => {
+    const dx = end.x - start.x;
+    if (Math.abs(dx) <= Number.EPSILON) {
+      return { x, y: end.y };
+    }
+    const t = (x - start.x) / dx;
+    return {
+      x,
+      y: start.y + (end.y - start.y) * t,
+    };
+  };
+
+  const intersectAtY = (y: number, start: Point, end: Point): Point => {
+    const dy = end.y - start.y;
+    if (Math.abs(dy) <= Number.EPSILON) {
+      return { x: end.x, y };
+    }
+    const t = (y - start.y) / dy;
+    return {
+      x: start.x + (end.x - start.x) * t,
+      y,
+    };
+  };
+
+  let clipped = polygon;
+  clipped = clipAgainstBoundary(clipped, (point) => point.x >= left, (start, end) => intersectAtX(left, start, end));
+  clipped = clipAgainstBoundary(clipped, (point) => point.x <= right, (start, end) => intersectAtX(right, start, end));
+  clipped = clipAgainstBoundary(clipped, (point) => point.y >= top, (start, end) => intersectAtY(top, start, end));
+  clipped = clipAgainstBoundary(clipped, (point) => point.y <= bottom, (start, end) => intersectAtY(bottom, start, end));
+
+  return clipped;
+}
+
+function overflowRegionGeometricAreaSquareFeet(polygon: Point[], region: DuplicateOverflowRegion): number {
+  let area = 0;
+  for (const cell of region.cells) {
+    const clipped = clipPolygonToRect(polygon, cell);
+    area += polygonAreaSquareFeet(clipped);
+  }
+  return area;
 }
 
 function nearestPointOnSegment(point: Point, start: Point, end: Point): { point: Point; t: number; distance: number } {
@@ -952,6 +1063,9 @@ function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor
     return null;
   }
 
+  const useCompactStandardLayout =
+    ceilingType === "standard" && overlayHeight <= RECTANGLE_COMPACT_LAYOUT_MAX_HEIGHT;
+
   const standardHeight = Number(entity.metadata.standardHeightFt ?? 8);
   const lowHeight = Number(entity.metadata.lowHeightFt ?? 8);
   const highHeight = Number(entity.metadata.highHeightFt ?? 12);
@@ -977,13 +1091,74 @@ function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor
   const numberScale = shouldScaleSlopedOrCathedralNumbers ? 0.76 : 1;
   const lowLabelFontSize = 0.82 * numberScale;
   const valueLabelFontSize = 0.94 * numberScale;
+  const badgeRadius = Math.max(0.42, 0.54 * numberScale);
+  const lowBadgeFontSize = Math.max(0.44, lowLabelFontSize * 0.76);
+  const valueBadgeFontSize = Math.max(0.48, valueLabelFontSize * 0.74);
+  const badgeFill = "rgb(38, 92, 168)";
+  const badgeTextFill = "#eaf4ff";
+  const lowBadgeRadius = badgeRadius;
+  const highBadgeRadius = badgeRadius + 0.02;
+  const badgeCornerRadius = 0.16;
+  const edgeGap = 0.5;
+  const verticalDisplayX = clampValue(
+    entity.width - Math.max(1.05, Math.min(2.2, entity.width * 0.2)),
+    inset + 0.85,
+    entity.width - inset - 0.85,
+  );
+  const horizontalDisplayY = clampValue(
+    entity.height - Math.max(1.0, Math.min(1.8, entity.height * 0.26)),
+    inset + 0.8,
+    entity.height - inset - 0.8,
+  );
+  const renderCeilingBadge = (cx: number, cy: number, label: string, fontSize: number, radius: number) => {
+    const width = Math.max(1.08, radius * 2.36);
+    const height = Math.max(0.84, radius * 1.86);
+    return (
+      <>
+        <rect
+          x={cx - width / 2}
+          y={cy - height / 2}
+          width={width}
+          height={height}
+          rx={badgeCornerRadius}
+          className="ceiling-height-badge"
+          fill={badgeFill}
+        />
+        <text
+          x={cx}
+          y={cy}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          className="ceiling-number"
+          fill={badgeTextFill}
+          fontSize={fontSize}
+          fontWeight={900}
+          style={{ fontSize: `${fontSize}px` }}
+        >
+          {label}
+        </text>
+      </>
+    );
+  };
 
   if (ceilingType === "standard") {
-    const heightValueY = yCenter + 0.28;
-    const heightTitleY = heightValueY - 0.86;
     const boxWidth = Math.max(3.4, Math.min(entity.width - 1, 5.2));
     const boxHeight = 1.86;
-    const boxX = xCenter - boxWidth / 2;
+    const compactBoxRightPadding = 0.5;
+    const compactCenterX = clampValue(
+      entity.width - compactBoxRightPadding - boxWidth / 2,
+      boxWidth / 2 + 0.5,
+      entity.width - boxWidth / 2 - 0.5,
+    );
+    const standardCenterX = useCompactStandardLayout ? compactCenterX : xCenter;
+    const compactBoxY = clampValue(
+      entity.height / 2 - boxHeight / 2,
+      0.28,
+      Math.max(0.28, entity.height - boxHeight - 0.28),
+    );
+    const heightValueY = useCompactStandardLayout ? compactBoxY + 1.58 : yCenter + 0.28;
+    const heightTitleY = heightValueY - 0.86;
+    const boxX = standardCenterX - boxWidth / 2;
     const boxY = heightTitleY - 0.72;
     return (
       <g className="ceiling-overlay" pointerEvents="none">
@@ -995,10 +1170,10 @@ function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor
           rx={0.2}
           className="ceiling-height-box"
         />
-        <text x={xCenter} y={heightTitleY} textAnchor="middle" className="ceiling-caption">
+        <text x={standardCenterX} y={heightTitleY} textAnchor="middle" className="ceiling-caption">
           CEILING
         </text>
-        <text x={xCenter} y={heightValueY} textAnchor="middle" className="ceiling-label">
+        <text x={standardCenterX} y={heightValueY} textAnchor="middle" className="ceiling-label ceiling-number">
           {fmtFeet(standardHeight)}
         </text>
       </g>
@@ -1014,55 +1189,27 @@ function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor
     const bottomArrowY = yCenter + centerGap;
 
     if (isCathedralHorizontal) {
+      const leftLowBadgeX = inset;
+      const rightLowBadgeX = entity.width - inset;
       return (
         <g className="ceiling-overlay" pointerEvents="none">
-          <line x1={xCenter} y1={0} x2={xCenter} y2={yCenter - 1.8} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.2} />
-          <line x1={xCenter} y1={yCenter + 1.8} x2={xCenter} y2={entity.height} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.2} />
-
-          <line x1={inset} y1={yCenter} x2={leftArrowX - arrowSize} y2={yCenter} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
-          <line x1={entity.width - inset} y1={yCenter} x2={rightArrowX + arrowSize} y2={yCenter} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
+          <line x1={inset} y1={horizontalDisplayY} x2={leftArrowX - arrowSize} y2={horizontalDisplayY} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
+          <line x1={entity.width - inset} y1={horizontalDisplayY} x2={rightArrowX + arrowSize} y2={horizontalDisplayY} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
 
           <polygon
-            points={`${leftArrowX - arrowSize},${yCenter - arrowSize} ${leftArrowX - arrowSize},${yCenter + arrowSize} ${leftArrowX},${yCenter}`}
+            points={`${leftArrowX - arrowSize},${horizontalDisplayY - arrowSize} ${leftArrowX - arrowSize},${horizontalDisplayY + arrowSize} ${leftArrowX},${horizontalDisplayY}`}
             fill={LINEAR_MARKER_COLOR}
           />
           <polygon
-            points={`${rightArrowX + arrowSize},${yCenter - arrowSize} ${rightArrowX + arrowSize},${yCenter + arrowSize} ${rightArrowX},${yCenter}`}
+            points={`${rightArrowX + arrowSize},${horizontalDisplayY - arrowSize} ${rightArrowX + arrowSize},${horizontalDisplayY + arrowSize} ${rightArrowX},${horizontalDisplayY}`}
             fill={LINEAR_MARKER_COLOR}
           />
 
           {!hideSlopedOrCathedralNumbers && (
             <>
-              <text
-                x={(inset + leftArrowX) / 2 - 0.1}
-                y={yCenter - 0.65}
-                textAnchor="middle"
-                className="ceiling-label"
-                fontSize={lowLabelFontSize}
-                style={{ fontSize: `${lowLabelFontSize}px` }}
-              >
-                {fmtFeet(lowHeight)}
-              </text>
-              <text
-                x={(entity.width - inset + rightArrowX) / 2 + 0.1}
-                y={yCenter - 0.65}
-                textAnchor="middle"
-                className="ceiling-label"
-                fontSize={lowLabelFontSize}
-                style={{ fontSize: `${lowLabelFontSize}px` }}
-              >
-                {fmtFeet(lowHeight)}
-              </text>
-              <text
-                x={xCenter}
-                y={yCenter + 0.74}
-                textAnchor="middle"
-                className="ceiling-value cathedral-value"
-                fontSize={valueLabelFontSize}
-                style={{ fontSize: `${valueLabelFontSize}px` }}
-              >
-                {fmtFeet(highHeight)}
-              </text>
+              {renderCeilingBadge(leftLowBadgeX, horizontalDisplayY, fmtFeet(lowHeight), lowBadgeFontSize, lowBadgeRadius)}
+              {renderCeilingBadge(rightLowBadgeX, horizontalDisplayY, fmtFeet(lowHeight), lowBadgeFontSize, lowBadgeRadius)}
+              {renderCeilingBadge(xCenter, horizontalDisplayY, fmtFeet(highHeight), valueBadgeFontSize, highBadgeRadius)}
             </>
           )}
         </g>
@@ -1071,53 +1218,23 @@ function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor
 
     return (
       <g className="ceiling-overlay" pointerEvents="none">
-        <line x1={0} y1={yCenter} x2={xCenter - 1.8} y2={yCenter} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.2} />
-        <line x1={xCenter + 1.8} y1={yCenter} x2={entity.width} y2={yCenter} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.2} />
-
-        <line x1={xCenter} y1={inset} x2={xCenter} y2={topArrowY - arrowSize} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
-        <line x1={xCenter} y1={entity.height - inset} x2={xCenter} y2={bottomArrowY + arrowSize} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
+        <line x1={verticalDisplayX} y1={inset} x2={verticalDisplayX} y2={topArrowY - arrowSize} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
+        <line x1={verticalDisplayX} y1={entity.height - inset} x2={verticalDisplayX} y2={bottomArrowY + arrowSize} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
 
         <polygon
-          points={`${xCenter - arrowSize},${topArrowY - arrowSize} ${xCenter + arrowSize},${topArrowY - arrowSize} ${xCenter},${topArrowY}`}
+          points={`${verticalDisplayX - arrowSize},${topArrowY - arrowSize} ${verticalDisplayX + arrowSize},${topArrowY - arrowSize} ${verticalDisplayX},${topArrowY}`}
           fill={LINEAR_MARKER_COLOR}
         />
         <polygon
-          points={`${xCenter - arrowSize},${bottomArrowY + arrowSize} ${xCenter + arrowSize},${bottomArrowY + arrowSize} ${xCenter},${bottomArrowY}`}
+          points={`${verticalDisplayX - arrowSize},${bottomArrowY + arrowSize} ${verticalDisplayX + arrowSize},${bottomArrowY + arrowSize} ${verticalDisplayX},${bottomArrowY}`}
           fill={LINEAR_MARKER_COLOR}
         />
 
         {!hideSlopedOrCathedralNumbers && (
           <>
-            <text
-              x={xCenter + 1.05}
-              y={(inset + topArrowY) / 2 + 0.2}
-              textAnchor="start"
-              className="ceiling-label"
-              fontSize={lowLabelFontSize}
-              style={{ fontSize: `${lowLabelFontSize}px` }}
-            >
-              {fmtFeet(lowHeight)}
-            </text>
-            <text
-              x={xCenter + 1.05}
-              y={(entity.height - inset + bottomArrowY) / 2 + 0.25}
-              textAnchor="start"
-              className="ceiling-label"
-              fontSize={lowLabelFontSize}
-              style={{ fontSize: `${lowLabelFontSize}px` }}
-            >
-              {fmtFeet(lowHeight)}
-            </text>
-            <text
-              x={xCenter}
-              y={yCenter + 0.74}
-              textAnchor="middle"
-              className="ceiling-value cathedral-value"
-              fontSize={valueLabelFontSize}
-              style={{ fontSize: `${valueLabelFontSize}px` }}
-            >
-              {fmtFeet(highHeight)}
-            </text>
+            {renderCeilingBadge(verticalDisplayX, inset, fmtFeet(lowHeight), lowBadgeFontSize, lowBadgeRadius)}
+            {renderCeilingBadge(verticalDisplayX, entity.height - inset, fmtFeet(lowHeight), lowBadgeFontSize, lowBadgeRadius)}
+            {renderCeilingBadge(verticalDisplayX, yCenter, fmtFeet(highHeight), valueBadgeFontSize, highBadgeRadius)}
           </>
         )}
       </g>
@@ -1126,41 +1243,31 @@ function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor
 
   if (isSlopedHorizontal) {
     const arrowSize = 0.5;
-    const lineStartX = inset + 0.8;
-    const lineEndX = Math.max(lineStartX + 1.2, entity.width - inset - 0.8);
+    const slopedCenterY = horizontalDisplayY;
+    const lineStartX = edgeGap + arrowSize;
+    const lineEndX = Math.max(lineStartX + 1.2, entity.width - edgeGap - arrowSize);
+    const leftArrowTipX = lineStartX - arrowSize;
+    const rightArrowTipX = lineEndX + arrowSize;
+    const minBadgeX = lineStartX + 0.75;
+    const maxBadgeX = lineEndX - 0.75;
+    const badgeInsetFromArrowhead = arrowSize + badgeRadius + 0.52;
+    const highBadgeX = clampValue(leftArrowTipX + badgeInsetFromArrowhead, minBadgeX, maxBadgeX);
+    const lowBadgeX = clampValue(rightArrowTipX - badgeInsetFromArrowhead, minBadgeX, maxBadgeX);
     return (
       <g className="ceiling-overlay" pointerEvents="none">
-        <line x1={lineStartX} y1={yCenter} x2={lineEndX} y2={yCenter} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
+        <line x1={lineStartX} y1={slopedCenterY} x2={lineEndX} y2={slopedCenterY} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
         <polygon
-          points={`${lineStartX + arrowSize},${yCenter - arrowSize} ${lineStartX + arrowSize},${yCenter + arrowSize} ${lineStartX - arrowSize},${yCenter}`}
+          points={`${lineStartX + arrowSize},${slopedCenterY - arrowSize} ${lineStartX + arrowSize},${slopedCenterY + arrowSize} ${lineStartX - arrowSize},${slopedCenterY}`}
           fill={LINEAR_MARKER_COLOR}
         />
         <polygon
-          points={`${lineEndX - arrowSize},${yCenter - arrowSize} ${lineEndX - arrowSize},${yCenter + arrowSize} ${lineEndX + arrowSize},${yCenter}`}
+          points={`${lineEndX - arrowSize},${slopedCenterY - arrowSize} ${lineEndX - arrowSize},${slopedCenterY + arrowSize} ${lineEndX + arrowSize},${slopedCenterY}`}
           fill={LINEAR_MARKER_COLOR}
         />
         {!hideSlopedOrCathedralNumbers && (
           <>
-            <text
-              x={lineStartX + 0.55}
-              y={yCenter + 0.88}
-              textAnchor="start"
-              className="ceiling-value cathedral-value"
-              fontSize={valueLabelFontSize}
-              style={{ fontSize: `${valueLabelFontSize}px` }}
-            >
-              {fmtFeet(highHeight)}
-            </text>
-            <text
-              x={lineEndX - 0.05}
-              y={yCenter + 0.88}
-              textAnchor="end"
-              className="ceiling-value cathedral-value"
-              fontSize={valueLabelFontSize}
-              style={{ fontSize: `${valueLabelFontSize}px` }}
-            >
-              {fmtFeet(lowHeight)}
-            </text>
+            {renderCeilingBadge(highBadgeX, slopedCenterY, fmtFeet(highHeight), valueBadgeFontSize, highBadgeRadius)}
+            {renderCeilingBadge(lowBadgeX, slopedCenterY, fmtFeet(lowHeight), valueBadgeFontSize, highBadgeRadius)}
           </>
         )}
       </g>
@@ -1168,37 +1275,22 @@ function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor
   }
 
   const arrowSize = 0.5;
-  const lineTopY = inset;
-  const lineBottomY = entity.height - inset - 0.8;
+  const slopedCenterX = verticalDisplayX;
+  const lineTopY = edgeGap;
+  const lineBottomY = Math.max(lineTopY + 1.2, entity.height - edgeGap);
+  const minBadgeY = lineTopY + 0.35;
+  const maxBadgeY = lineBottomY - 0.35;
+  const highBadgeY = clampValue(lineTopY + arrowSize + badgeRadius + 0.2, minBadgeY, maxBadgeY);
+  const lowBadgeY = clampValue(lineBottomY - arrowSize - badgeRadius - 0.2, minBadgeY, maxBadgeY);
   return (
     <g className="ceiling-overlay" pointerEvents="none">
-      <line x1={xCenter} y1={lineBottomY} x2={xCenter} y2={lineTopY} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
-      <polygon points={`${xCenter - arrowSize},${lineTopY + 0.8} ${xCenter + arrowSize},${lineTopY + 0.8} ${xCenter},${lineTopY}`} fill={LINEAR_MARKER_COLOR} />
-      <polygon points={`${xCenter - arrowSize},${lineBottomY - 0.8} ${xCenter + arrowSize},${lineBottomY - 0.8} ${xCenter},${lineBottomY}`} fill={LINEAR_MARKER_COLOR} />
+      <line x1={slopedCenterX} y1={lineBottomY} x2={slopedCenterX} y2={lineTopY} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
+      <polygon points={`${slopedCenterX - arrowSize},${lineTopY + arrowSize} ${slopedCenterX + arrowSize},${lineTopY + arrowSize} ${slopedCenterX},${lineTopY}`} fill={LINEAR_MARKER_COLOR} />
+      <polygon points={`${slopedCenterX - arrowSize},${lineBottomY - arrowSize} ${slopedCenterX + arrowSize},${lineBottomY - arrowSize} ${slopedCenterX},${lineBottomY}`} fill={LINEAR_MARKER_COLOR} />
       {!hideSlopedOrCathedralNumbers && (
         <>
-          <text
-            x={xCenter - 0.62}
-            y={lineTopY + 0.85}
-            textAnchor="middle"
-            className="ceiling-value cathedral-value"
-            transform={`rotate(-90 ${xCenter - 0.62} ${lineTopY + 0.85})`}
-            fontSize={valueLabelFontSize}
-            style={{ fontSize: `${valueLabelFontSize}px` }}
-          >
-            {fmtFeet(highHeight)}
-          </text>
-          <text
-            x={xCenter - 0.62}
-            y={lineBottomY - 0.1}
-            textAnchor="middle"
-            className="ceiling-value cathedral-value"
-            transform={`rotate(-90 ${xCenter - 0.62} ${lineBottomY - 0.1})`}
-            fontSize={valueLabelFontSize}
-            style={{ fontSize: `${valueLabelFontSize}px` }}
-          >
-            {fmtFeet(lowHeight)}
-          </text>
+          {renderCeilingBadge(slopedCenterX, highBadgeY, fmtFeet(highHeight), valueBadgeFontSize, highBadgeRadius)}
+          {renderCeilingBadge(slopedCenterX, lowBadgeY, fmtFeet(lowHeight), valueBadgeFontSize, highBadgeRadius)}
         </>
       )}
     </g>
@@ -1461,7 +1553,33 @@ function getTextBounds(label: string, size: "small" | "medium" | "large") {
   };
 }
 
-function PerimeterGuides({ guides }: { guides: GuideSegment[] }) {
+type LinearMarkerOccluder =
+  | { type: "rect"; x: number; y: number; width: number; height: number }
+  | { type: "polygon"; points: Point[]; bounds: { x: number; y: number; width: number; height: number } };
+
+function isPointInsideLinearMarkerOccluder(point: Point, occluder: LinearMarkerOccluder): boolean {
+  if (occluder.type === "rect") {
+    return containsPoint(occluder, point.x, point.y);
+  }
+
+  const { bounds } = occluder;
+  if (
+    point.x < bounds.x ||
+    point.x > bounds.x + bounds.width ||
+    point.y < bounds.y ||
+    point.y > bounds.y + bounds.height
+  ) {
+    return false;
+  }
+
+  return pointInPolygonInclusive(point, occluder.points);
+}
+
+function isPointOccludedByLinearMarkerOccluders(point: Point, occluders: LinearMarkerOccluder[]): boolean {
+  return occluders.some((occluder) => isPointInsideLinearMarkerOccluder(point, occluder));
+}
+
+function PerimeterGuides({ guides, occluders }: { guides: GuideSegment[]; occluders: LinearMarkerOccluder[] }) {
   const hOffset = 4.5;
   const vOffset = 4.5;
   const staggerStep = 1.8;
@@ -1509,9 +1627,23 @@ function PerimeterGuides({ guides }: { guides: GuideSegment[] }) {
         });
 
         if (!conflicts) {
-          positionedGuides.push({ segment, labelX, labelY, lineAxis: lineY });
-          placedAnchors.push({ x: labelX, y: labelY });
-          break;
+          const sampleCount = Math.max(2, Math.ceil((segment.x2 - segment.x1) / 1.2));
+          let occluded = isPointOccludedByLinearMarkerOccluders({ x: labelX, y: labelY }, occluders);
+          if (!occluded) {
+            for (let sampleIndex = 0; sampleIndex <= sampleCount; sampleIndex += 1) {
+              const t = sampleIndex / sampleCount;
+              const sampleX = segment.x1 + (segment.x2 - segment.x1) * t;
+              if (isPointOccludedByLinearMarkerOccluders({ x: sampleX, y: lineY }, occluders)) {
+                occluded = true;
+                break;
+              }
+            }
+          }
+          if (!occluded) {
+            positionedGuides.push({ segment, labelX, labelY, lineAxis: lineY });
+            placedAnchors.push({ x: labelX, y: labelY });
+            break;
+          }
         }
       } else {
         const midY = (segment.y1 + segment.y2) / 2;
@@ -1527,9 +1659,23 @@ function PerimeterGuides({ guides }: { guides: GuideSegment[] }) {
         });
 
         if (!conflicts) {
-          positionedGuides.push({ segment, labelX, labelY, lineAxis: lineX });
-          placedAnchors.push({ x: labelX, y: labelY });
-          break;
+          const sampleCount = Math.max(2, Math.ceil((segment.y2 - segment.y1) / 1.2));
+          let occluded = isPointOccludedByLinearMarkerOccluders({ x: labelX, y: labelY }, occluders);
+          if (!occluded) {
+            for (let sampleIndex = 0; sampleIndex <= sampleCount; sampleIndex += 1) {
+              const t = sampleIndex / sampleCount;
+              const sampleY = segment.y1 + (segment.y2 - segment.y1) * t;
+              if (isPointOccludedByLinearMarkerOccluders({ x: lineX, y: sampleY }, occluders)) {
+                occluded = true;
+                break;
+              }
+            }
+          }
+          if (!occluded) {
+            positionedGuides.push({ segment, labelX, labelY, lineAxis: lineX });
+            placedAnchors.push({ x: labelX, y: labelY });
+            break;
+          }
         }
       }
 
@@ -2986,9 +3132,11 @@ function getWindowExteriorLabelY(entity: MapEntity, rectangles: MapEntity[], sel
   const negYFacesOutward =
     localNegYWorld.x * outward.x + localNegYWorld.y * outward.y >= 0;
 
+  const bottomEdgePadding = edge === "bottom" ? WINDOW_BOTTOM_LABEL_EXTRA_PADDING : 0;
   const distance =
     WINDOW_LABEL_OFFSET +
-    (selected ? OPENING_LABEL_UNDER_SELECTED_PADDING + WINDOW_BOTTOM_LABEL_EXTRA_PADDING : 0);
+    bottomEdgePadding +
+    (selected ? OPENING_LABEL_UNDER_SELECTED_PADDING : 0);
 
   return negYFacesOutward ? -distance : distance;
 }
@@ -4036,6 +4184,32 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
     return buildRectangleGuideGroups(rectangles);
   }, [floor.entities]);
 
+  const linearMarkerOccluders = useMemo<LinearMarkerOccluder[]>(() => {
+    const occluders: LinearMarkerOccluder[] = [];
+    for (const entity of floor.entities) {
+      if (entity.type !== "rectangle") {
+        continue;
+      }
+
+      if (isBumpOutRectangle(entity)) {
+        const points = getBumpOutWorldPoints(entity);
+        if (points.length < 3) {
+          continue;
+        }
+        occluders.push({
+          type: "polygon",
+          points,
+          bounds: polygonBounds(points),
+        });
+        continue;
+      }
+
+      const rect = rectBoundsFromEntity(entity);
+      occluders.push({ type: "rect", ...rect });
+    }
+    return occluders;
+  }, [floor.entities]);
+
   const conditionedConnectedEdgeRanges = useMemo(
     () => buildConditionedConnectedEdgeRanges(rectangleEntities),
     [rectangleEntities],
@@ -4063,6 +4237,39 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
       return null;
     }
     return candidate;
+  }, [floor.entities, state.selection]);
+
+  const sliderZoomTargetWorld = useMemo<Point | null>(() => {
+    if (state.selection.kind === "entity") {
+      const selectedEntityId = state.selection.id;
+      const selected = floor.entities.find((entity) => entity.id === selectedEntityId);
+      if (selected) {
+        const selectedBounds = getEntityWorldBounds(selected);
+        if (selectedBounds) {
+          return {
+            x: (selectedBounds.minX + selectedBounds.maxX) / 2,
+            y: (selectedBounds.minY + selectedBounds.maxY) / 2,
+          };
+        }
+      }
+    }
+
+    let objectBounds: WorldBounds | null = null;
+    for (const entity of floor.entities) {
+      const entityBounds = getEntityWorldBounds(entity);
+      if (entityBounds) {
+        objectBounds = expandBounds(objectBounds, entityBounds);
+      }
+    }
+
+    if (!objectBounds) {
+      return null;
+    }
+
+    return {
+      x: (objectBounds.minX + objectBounds.maxX) / 2,
+      y: (objectBounds.minY + objectBounds.maxY) / 2,
+    };
   }, [floor.entities, state.selection]);
 
   const frameTargetBounds = useMemo(() => {
@@ -5976,6 +6183,17 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
     if (!workspace) {
       return;
     }
+    if (sliderZoomTargetWorld) {
+      dispatch({
+        type: "SET_CAMERA",
+        camera: {
+          zoom: value,
+          x: workspace.clientWidth / 2 - sliderZoomTargetWorld.x * value,
+          y: workspace.clientHeight / 2 - sliderZoomTargetWorld.y * value,
+        },
+      });
+      return;
+    }
     dispatch({
       type: "ZOOM_CAMERA",
       nextZoom: value,
@@ -6990,13 +7208,251 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
       return null;
     }
     const rect = rectBoundsFromEntity(selectedBumpOutEntity);
-    const rawX = state.camera.x + rect.x * state.camera.zoom - 34;
+    const leftAnchorWorldX = rect.x - RECT_RESIZE_HANDLE_OUTSET;
+    const leftAnchorScreenX = state.camera.x + leftAnchorWorldX * state.camera.zoom;
+    const controlHalfWidthPx = 17;
+    const gapFromAnchorPx = 10;
+    const rawX = leftAnchorScreenX - (controlHalfWidthPx + gapFromAnchorPx);
     const rawY = state.camera.y + (rect.y + rect.height / 2) * state.camera.zoom;
     return {
       x: clampValue(rawX, 22, Math.max(22, viewportSize.width - 22)),
       y: clampValue(rawY, 64, Math.max(64, viewportSize.height - 64)),
     };
   }, [selectedBumpOutEntity, state.camera.x, state.camera.y, state.camera.zoom, viewportSize.height, viewportSize.width]);
+
+  const orientationCompassLabels = useMemo(() => {
+    const selectedIndex = ORIENTATION_ORDER.indexOf(state.project.orientation);
+    const offset = selectedIndex >= 0 ? (selectedIndex - 4 + ORIENTATION_ORDER.length) % ORIENTATION_ORDER.length : 0;
+    return ORIENTATION_POINT_POSITIONS.map((position, index) => {
+      const labelIndex = (index + offset) % ORIENTATION_ORDER.length;
+      return {
+        ...position,
+        label: ORIENTATION_ORDER[labelIndex],
+      };
+    });
+  }, [state.project.orientation]);
+
+  const focusSelectionHole = useMemo<{ path: string; bounds: WorldBounds } | null>(() => {
+    const pathFromWorldPoints = (points: Point[]): { path: string; bounds: WorldBounds } | null => {
+      if (points.length < 3) {
+        return null;
+      }
+      const path = `${bumpOutPath(points)} Z`;
+      const bounds = polygonBounds(points);
+      return {
+        path,
+        bounds: {
+          minX: bounds.x,
+          minY: bounds.y,
+          maxX: bounds.x + bounds.width,
+          maxY: bounds.y + bounds.height,
+        },
+      };
+    };
+
+    const toWorldPoint = (entity: MapEntity, localX: number, localY: number): Point => {
+      const rotationRad = (entity.rotation * Math.PI) / 180;
+      const cos = Math.cos(rotationRad);
+      const sin = Math.sin(rotationRad);
+      return {
+        x: entity.x + localX * cos - localY * sin,
+        y: entity.y + localX * sin + localY * cos,
+      };
+    };
+
+    const orientedRectPoints = (
+      entity: MapEntity,
+      centerX: number,
+      centerY: number,
+      width: number,
+      height: number,
+    ): Point[] => {
+      const halfW = width / 2;
+      const halfH = height / 2;
+      return [
+        toWorldPoint(entity, centerX - halfW, centerY - halfH),
+        toWorldPoint(entity, centerX + halfW, centerY - halfH),
+        toWorldPoint(entity, centerX + halfW, centerY + halfH),
+        toWorldPoint(entity, centerX - halfW, centerY + halfH),
+      ];
+    };
+
+    const selection = state.selection;
+    if (selection.kind === "none") {
+      return null;
+    }
+
+    if (selection.kind === "entity") {
+      const selected = floor.entities.find((entity) => entity.id === selection.id);
+      if (!selected) {
+        return null;
+      }
+      if (selected.type === "rectangle") {
+        if (isBumpOutRectangle(selected)) {
+          const points = getBumpOutWorldPoints(selected);
+          return pathFromWorldPoints(points);
+        }
+
+        const rect = rectBoundsFromEntity(selected);
+        return {
+          path: `M ${rect.x} ${rect.y} H ${rect.x + rect.width} V ${rect.y + rect.height} H ${rect.x} Z`,
+          bounds: {
+            minX: rect.x,
+            minY: rect.y,
+            maxX: rect.x + rect.width,
+            maxY: rect.y + rect.height,
+          },
+        };
+      }
+
+      if (selected.type === "window") {
+        const points = orientedRectPoints(
+          selected,
+          0,
+          0,
+          Math.max(1, selected.width),
+          WINDOW_FILL_THICKNESS,
+        );
+        return pathFromWorldPoints(points);
+      }
+
+      if (selected.type === "door") {
+        const doorKind = getDoorKind(selected);
+        const doorVisualWidth = Math.max(1, getDoorVisualWidth(selected));
+
+        if (doorKind === "sliding") {
+          const points = orientedRectPoints(
+            selected,
+            0,
+            0,
+            doorVisualWidth,
+            WINDOW_FILL_THICKNESS,
+          );
+          return pathFromWorldPoints(points);
+        }
+
+        const flipSign = Boolean(selected.metadata.flipped) ? -1 : 1;
+        const localTop = flipSign === 1 ? 0 : -doorVisualWidth;
+        const localBottom = localTop + doorVisualWidth;
+        const points = [
+          toWorldPoint(selected, -doorVisualWidth / 2, localTop),
+          toWorldPoint(selected, doorVisualWidth / 2, localTop),
+          toWorldPoint(selected, doorVisualWidth / 2, localBottom),
+          toWorldPoint(selected, -doorVisualWidth / 2, localBottom),
+        ];
+        return pathFromWorldPoints(points);
+      }
+
+      const bounds = getEntityWorldBounds(selected);
+      if (!bounds) {
+        return null;
+      }
+      return {
+        path: `M ${bounds.minX} ${bounds.minY} H ${bounds.maxX} V ${bounds.maxY} H ${bounds.minX} Z`,
+        bounds,
+      };
+    }
+
+    if (selection.kind === "wallPoint") {
+      const point = pointById.get(selection.id);
+      if (!point) {
+        return null;
+      }
+      const pad = 0.42;
+      return {
+        path: `M ${point.x - pad} ${point.y - pad} H ${point.x + pad} V ${point.y + pad} H ${point.x - pad} Z`,
+        bounds: {
+          minX: point.x - pad,
+          minY: point.y - pad,
+          maxX: point.x + pad,
+          maxY: point.y + pad,
+        },
+      };
+    }
+
+    const segment = floor.wallSegments.find((candidate) => candidate.id === selection.id);
+    if (!segment) {
+      return null;
+    }
+    const start = pointById.get(segment.startPointId);
+    const end = pointById.get(segment.endPointId);
+    if (!start || !end) {
+      return null;
+    }
+    const pad = 0.4;
+    const minX = Math.min(start.x, end.x) - pad;
+    const minY = Math.min(start.y, end.y) - pad;
+    const maxX = Math.max(start.x, end.x) + pad;
+    const maxY = Math.max(start.y, end.y) + pad;
+    return {
+      path: `M ${minX} ${minY} H ${maxX} V ${maxY} H ${minX} Z`,
+      bounds: {
+        minX,
+        minY,
+        maxX,
+        maxY,
+      },
+    };
+  }, [floor.entities, floor.wallSegments, pointById, state.selection]);
+
+  const focusOverlayPath = useMemo(() => {
+    if (!focusSelectionHole) {
+      return null;
+    }
+
+    const worldPad = 6;
+    const minX = worldViewport.minX - worldPad;
+    const minY = worldViewport.minY - worldPad;
+    const maxX = worldViewport.maxX + worldPad;
+    const maxY = worldViewport.maxY + worldPad;
+    const hole = focusSelectionHole;
+
+    return [
+      `M ${minX} ${minY}`,
+      `H ${maxX}`,
+      `V ${maxY}`,
+      `H ${minX}`,
+      "Z",
+      hole.path,
+    ].join(" ");
+  }, [focusSelectionHole, worldViewport.maxX, worldViewport.maxY, worldViewport.minX, worldViewport.minY]);
+
+  const showFocusOverlay =
+    Boolean(focusOverlayPath) &&
+    state.selection.kind !== "none" &&
+    interactionRef.current.type === "none";
+
+  const focusModeSizeCue = useMemo<{
+    x: number;
+    y: number;
+    textAnchor: "middle";
+    label: string;
+    fontSize: number;
+  } | null>(() => {
+    if (!showFocusOverlay || !selectedRectangleEntity || !focusSelectionHole) {
+      return null;
+    }
+
+    const rect = rectBoundsFromEntity(selectedRectangleEntity);
+    const width = Math.max(1, Math.round(Math.abs(rect.width)));
+    const height = Math.max(1, Math.round(Math.abs(rect.height)));
+    const minSide = Math.max(1, Math.min(width, height));
+    const fontSize = clampValue(minSide * 0.42, 0.95, 5.4);
+    const label = `${fmtFeet(width)} x ${fmtFeet(height)}`;
+    const bounds = focusSelectionHole.bounds;
+    const x = (bounds.minX + bounds.maxX) / 2;
+    const topAnchorY = rect.y - RECT_RESIZE_HANDLE_OUTSET;
+    const y = topAnchorY - Math.max(1.1, fontSize * 0.64);
+    const clampedX = clampValue(x, worldViewport.minX + 1.2, worldViewport.maxX - 1.2);
+    const clampedY = clampValue(y, worldViewport.minY + 1.2, worldViewport.maxY - 1.2);
+    return {
+      x: clampedX,
+      y: clampedY,
+      textAnchor: "middle",
+      label,
+      fontSize,
+    };
+  }, [focusSelectionHole, selectedRectangleEntity, showFocusOverlay, worldViewport.maxX, worldViewport.maxY, worldViewport.minX, worldViewport.minY]);
 
   return (
     <div className="workspace-wrap">
@@ -7093,7 +7549,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
 
           {!hideLinearMarkers &&
             rectangleGuideGroups.map((group, index) => (
-              <PerimeterGuides key={`rg-perimeter-${index}`} guides={group.guides} />
+              <PerimeterGuides key={`rg-perimeter-${index}`} guides={group.guides} occluders={linearMarkerOccluders} />
             ))}
 
           {showSupportingFloorplan && supportingFloorForGhost && (
@@ -7690,6 +8146,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
                       const width = Math.max(entity.width, 0.4);
                       const height = Math.max(entity.height, 0.4);
                       const points = getBumpOutRenderPoints(entity);
+                      const worldPoints = points.map((point) => ({ x: entity.x + point.x, y: entity.y + point.y }));
                       const path = bumpOutPath(points);
                       const hostEdge = (entity.metadata.hostEdge as RectEdge | undefined) ?? "top";
                       const isUnconditioned = Boolean(entity.metadata.unconditioned);
@@ -7832,7 +8289,10 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
                               {labeledDuplicateOverflowRegions.map(({ region, label }, regionIndex) => {
                                 const labelCenterX = (region.minX + region.maxX) / 2 - entity.x;
                                 const labelCenterY = (region.minY + region.maxY) / 2 - entity.y;
-                                const regionAreaFt2 = region.cells.length;
+                                const regionAreaFt2 = Math.max(
+                                  1,
+                                  Math.round(overflowRegionGeometricAreaSquareFeet(worldPoints, region)),
+                                );
                                 const overflowFillColor = getOverflowRegionFillColor(label);
                                 const outlineLoops = buildOverflowOutlineLoops(region.outline);
                                 const labelFontSize = clampValue(
@@ -8202,22 +8662,44 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
                   <RectangleCeilingOverlay entity={entity} anchor={sharedCeilingOverlayPlacement.anchorById.get(entity.id)} />
                 )}
 
-                {entity.type === "rectangle" && (entity.label ?? "").trim().length > 0 && (() => {
+                {entity.type === "rectangle" && (() => {
                   const width = Math.max(entity.width, 0.4);
                   const height = Math.max(entity.height, 0.4);
+                  const hideLabelStack = width < 8 || height < 3;
                   const label = (entity.label ?? "").trim().toUpperCase();
+                  const hasLabel = label.length > 0;
+                  const isBumpOut = isBumpOutRectangle(entity);
+                  const areaSquareFeet = isBumpOut
+                    ? polygonAreaSquareFeet(getBumpOutRenderPoints(entity))
+                    : width * height;
+                  const areaLabel = `${Math.max(1, Math.round(areaSquareFeet))} FT²`;
                   const ceilingType = String(entity.metadata.ceilingType ?? "standard");
                   const hasStandardCeilingBox =
                     ceilingType === "standard" && sharedCeilingOverlayPlacement.visibleIds.has(entity.id);
+                  const useCompactLabelLayout =
+                    hasStandardCeilingBox && height <= RECTANGLE_COMPACT_LAYOUT_MAX_HEIGHT;
+                  const compactCeilingBoxWidth = Math.max(3.4, Math.min(width - 1, 5.2));
+                  const compactGap = 0.7;
+                  const compactRightPadding = 0.5;
+                  const compactLabelLaneMaxX =
+                    width - compactCeilingBoxWidth - compactGap - compactRightPadding;
+                  const textCenterX = useCompactLabelLayout
+                    ? clampValue(compactLabelLaneMaxX / 2, 0.9, Math.max(0.9, compactLabelLaneMaxX - 0.9))
+                    : width / 2;
                   const overlayAnchorY = sharedCeilingOverlayPlacement.anchorById.get(entity.id)?.y ?? height / 2;
                   const standardBoxTopY = overlayAnchorY - 1.3;
-                  const y = hasStandardCeilingBox
-                    ? Math.max(0.82, standardBoxTopY - 0.44)
-                    : Math.max(0.82, height * 0.42);
+                  const labelY = hasStandardCeilingBox
+                    ? useCompactLabelLayout
+                      ? clampValue(height / 2 + 0.24, 1, Math.max(1, height - 0.66))
+                      : Math.max(1.2, standardBoxTopY - 0.82)
+                    : Math.max(1.2, height * 0.36);
 
                   // Keep a consistent default label size and only scale down when it would overflow this rectangle.
                   const horizontalPadding = 0.6;
-                  const availableWidth = Math.max(0.2, width - horizontalPadding);
+                  const availableWidth = Math.max(
+                    0.2,
+                    (useCompactLabelLayout ? compactLabelLaneMaxX : width) - horizontalPadding,
+                  );
                   const estimatedLabelWidthAtDefault =
                     label.length * RECTANGLE_LABEL_DEFAULT_FONT_SIZE * 0.62;
                   const scaleDown =
@@ -8228,20 +8710,60 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
                     RECTANGLE_LABEL_MIN_FONT_SIZE,
                     RECTANGLE_LABEL_DEFAULT_FONT_SIZE * scaleDown,
                   );
+                  const areaFontSize = Math.max(0.46, Math.min(0.72, fontSize * 0.68));
+                  const minStackPadding = 0.16;
+                  const halfAreaText = areaFontSize * 0.55;
+                  const halfLabelText = fontSize * 0.55;
+                  const requiredCenterGap = halfAreaText + halfLabelText + minStackPadding;
+                  const minAreaCenterY = 0.72;
+                  const maxLabelCenterY = Math.max(1, height - 0.66);
+                  let resolvedLabelY = clampValue(labelY, 1, maxLabelCenterY);
+                  let resolvedAreaY = resolvedLabelY - requiredCenterGap;
+
+                  if (resolvedAreaY < minAreaCenterY) {
+                    resolvedAreaY = minAreaCenterY;
+                    resolvedLabelY = Math.max(resolvedLabelY, resolvedAreaY + requiredCenterGap);
+                  }
+
+                  if (resolvedLabelY > maxLabelCenterY) {
+                    resolvedLabelY = maxLabelCenterY;
+                    resolvedAreaY = Math.max(minAreaCenterY, resolvedLabelY - requiredCenterGap);
+                  }
+
+                  if (hideLabelStack) {
+                    return null;
+                  }
 
                   return (
-                    <text
-                      x={width / 2}
-                      y={y}
-                      textAnchor="middle"
-                      dominantBaseline="middle"
-                      fill="#ffffff"
-                      fontSize={fontSize}
-                      fontWeight={900}
-                      style={{ fontSize: `${fontSize}px` }}
-                    >
-                      {label}
-                    </text>
+                    <>
+                      <text
+                        x={textCenterX}
+                        y={resolvedAreaY}
+                        textAnchor="middle"
+                        dominantBaseline="middle"
+                        fill="rgba(235, 246, 255, 0.94)"
+                        fontSize={areaFontSize}
+                        fontWeight={800}
+                        letterSpacing="0.02em"
+                        style={{ fontSize: `${areaFontSize}px` }}
+                      >
+                        {areaLabel}
+                      </text>
+                      {hasLabel && (
+                        <text
+                          x={textCenterX}
+                          y={resolvedLabelY}
+                          textAnchor="middle"
+                          dominantBaseline="middle"
+                          fill="#ffffff"
+                          fontSize={fontSize}
+                          fontWeight={900}
+                          style={{ fontSize: `${fontSize}px` }}
+                        >
+                          {label}
+                        </text>
+                      )}
+                    </>
                   );
                 })()}
 
@@ -8365,6 +8887,38 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
             interactionRef.current.entitySnapshot?.type === "rectangle" &&
             resizeCueRectangleEntity && <RectangleDragSizeCue rect={rectBoundsFromEntity(resizeCueRectangleEntity)} />}
 
+          {showFocusOverlay && focusOverlayPath && (
+            <path
+              d={focusOverlayPath}
+              fill="rgba(11, 22, 40, 0.42)"
+              fillRule="evenodd"
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                if (event.pointerType === "touch" || event.pointerType === "pen") {
+                  event.preventDefault();
+                }
+                dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
+              }}
+            />
+          )}
+
+          {focusModeSizeCue && (
+            <g pointerEvents="none" className="rect-drag-size-cue">
+              <text
+                x={focusModeSizeCue.x}
+                y={focusModeSizeCue.y}
+                textAnchor={focusModeSizeCue.textAnchor}
+                dominantBaseline="middle"
+                fill={LINEAR_MARKER_COLOR}
+                fontSize={focusModeSizeCue.fontSize}
+                fontWeight={900}
+                style={{ fontSize: `${focusModeSizeCue.fontSize}px` }}
+              >
+                {focusModeSizeCue.label}
+              </text>
+            </g>
+          )}
+
           {selectedRectangleEntity && (() => {
             const rect = rectBoundsFromEntity(selectedRectangleEntity);
             const x1 = rect.x;
@@ -8384,11 +8938,54 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
               activeRectZone === zone || activeRectResizeZone === zone;
             const canUseHandle = (handle: ResizeHandle) =>
               isBumpOutResizeHandleAllowed(selectedRectangleEntity, handle);
-            const anchors: Array<{ x: number; y: number; handle: ResizeHandle; cursor: string }> = [
-              { x: x1, y: y1, handle: "nw", cursor: "nwse-resize" },
-              { x: x2, y: y1, handle: "ne", cursor: "nesw-resize" },
-              { x: x1, y: y2, handle: "sw", cursor: "nesw-resize" },
-              { x: x2, y: y2, handle: "se", cursor: "nwse-resize" },
+            const horizontalAnchorLength = Math.max(1.6, rect.width * 0.75);
+            const verticalAnchorLength = Math.max(1.6, rect.height * 0.75);
+            const edgeAnchors: Array<{
+              x: number;
+              y: number;
+              handle: ResizeHandle;
+              cursor: string;
+              width: number;
+              height: number;
+            }> = [
+              {
+                x: midX,
+                y: y1 - RECT_RESIZE_HANDLE_OUTSET,
+                handle: "n",
+                cursor: "ns-resize",
+                width: horizontalAnchorLength,
+                height: RECT_RESIZE_ANCHOR_THICKNESS,
+              },
+              {
+                x: midX,
+                y: y2 + RECT_RESIZE_HANDLE_OUTSET,
+                handle: "s",
+                cursor: "ns-resize",
+                width: horizontalAnchorLength,
+                height: RECT_RESIZE_ANCHOR_THICKNESS,
+              },
+              {
+                x: x1 - RECT_RESIZE_HANDLE_OUTSET,
+                y: midY,
+                handle: "w",
+                cursor: "ew-resize",
+                width: RECT_RESIZE_ANCHOR_THICKNESS,
+                height: verticalAnchorLength,
+              },
+              {
+                x: x2 + RECT_RESIZE_HANDLE_OUTSET,
+                y: midY,
+                handle: "e",
+                cursor: "ew-resize",
+                width: RECT_RESIZE_ANCHOR_THICKNESS,
+                height: verticalAnchorLength,
+              },
+            ];
+            const cornerAnchors: Array<{ x: number; y: number; handle: ResizeHandle; cursor: string }> = [
+              { x: x1 - RECT_RESIZE_HANDLE_OUTSET, y: y1 - RECT_RESIZE_HANDLE_OUTSET, handle: "nw", cursor: "nwse-resize" },
+              { x: x2 + RECT_RESIZE_HANDLE_OUTSET, y: y1 - RECT_RESIZE_HANDLE_OUTSET, handle: "ne", cursor: "nesw-resize" },
+              { x: x1 - RECT_RESIZE_HANDLE_OUTSET, y: y2 + RECT_RESIZE_HANDLE_OUTSET, handle: "sw", cursor: "nesw-resize" },
+              { x: x2 + RECT_RESIZE_HANDLE_OUTSET, y: y2 + RECT_RESIZE_HANDLE_OUTSET, handle: "se", cursor: "nwse-resize" },
             ];
 
             return (
@@ -8406,79 +9003,59 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
                     pointerEvents="none"
                   />
                 )}
-                <line
-                  x1={x1}
-                  y1={y1}
-                  x2={x2}
-                  y2={y1}
-                  stroke="transparent"
-                  strokeWidth={2}
-                  style={{ cursor: canUseHandle("n") ? "ns-resize" : "default" }}
-                  onPointerEnter={() => canUseHandle("n") && setResizeHintZone(selectedRectangleEntity.id, "rect-n")}
-                  onPointerLeave={() => canUseHandle("n") && clearResizeHintZone(selectedRectangleEntity.id, "rect-n")}
-                  onPointerDown={(event) => canUseHandle("n") && startRectangleResize(event, selectedRectangleEntity, "n")}
-                />
-                <line
-                  x1={x1}
-                  y1={y2}
-                  x2={x2}
-                  y2={y2}
-                  stroke="transparent"
-                  strokeWidth={2}
-                  style={{ cursor: canUseHandle("s") ? "ns-resize" : "default" }}
-                  onPointerEnter={() => canUseHandle("s") && setResizeHintZone(selectedRectangleEntity.id, "rect-s")}
-                  onPointerLeave={() => canUseHandle("s") && clearResizeHintZone(selectedRectangleEntity.id, "rect-s")}
-                  onPointerDown={(event) => canUseHandle("s") && startRectangleResize(event, selectedRectangleEntity, "s")}
-                />
-                <line
-                  x1={x1}
-                  y1={y1}
-                  x2={x1}
-                  y2={y2}
-                  stroke="transparent"
-                  strokeWidth={2}
-                  style={{ cursor: canUseHandle("w") ? "ew-resize" : "default" }}
-                  onPointerEnter={() => canUseHandle("w") && setResizeHintZone(selectedRectangleEntity.id, "rect-w")}
-                  onPointerLeave={() => canUseHandle("w") && clearResizeHintZone(selectedRectangleEntity.id, "rect-w")}
-                  onPointerDown={(event) => canUseHandle("w") && startRectangleResize(event, selectedRectangleEntity, "w")}
-                />
-                <line
-                  x1={x2}
-                  y1={y1}
-                  x2={x2}
-                  y2={y2}
-                  stroke="transparent"
-                  strokeWidth={2}
-                  style={{ cursor: canUseHandle("e") ? "ew-resize" : "default" }}
-                  onPointerEnter={() => canUseHandle("e") && setResizeHintZone(selectedRectangleEntity.id, "rect-e")}
-                  onPointerLeave={() => canUseHandle("e") && clearResizeHintZone(selectedRectangleEntity.id, "rect-e")}
-                  onPointerDown={(event) => canUseHandle("e") && startRectangleResize(event, selectedRectangleEntity, "e")}
-                />
+                {edgeAnchors.map((anchor) => (
+                  <g key={`${anchor.handle}-${anchor.x}-${anchor.y}`}>
+                    <rect
+                      x={anchor.x - anchor.width / 2 - RECT_RESIZE_HANDLE_HIT_SLOP}
+                      y={anchor.y - anchor.height / 2 - RECT_RESIZE_HANDLE_HIT_SLOP}
+                      width={anchor.width + RECT_RESIZE_HANDLE_HIT_SLOP * 2}
+                      height={anchor.height + RECT_RESIZE_HANDLE_HIT_SLOP * 2}
+                      rx={0.12}
+                      fill="transparent"
+                      style={{ cursor: canUseHandle(anchor.handle) ? anchor.cursor : "default" }}
+                      onPointerEnter={() =>
+                        canUseHandle(anchor.handle) &&
+                        setResizeHintZone(selectedRectangleEntity.id, `rect-${anchor.handle}` as ResizeHintZone)
+                      }
+                      onPointerLeave={() =>
+                        canUseHandle(anchor.handle) &&
+                        clearResizeHintZone(selectedRectangleEntity.id, `rect-${anchor.handle}` as ResizeHintZone)
+                      }
+                      onPointerDown={(event) => canUseHandle(anchor.handle) && startRectangleResize(event, selectedRectangleEntity, anchor.handle)}
+                    />
+                    {showRectZoneHint(`rect-${anchor.handle}` as ResizeHintZone) && (
+                      <rect
+                        x={anchor.x - anchor.width / 2 - 0.12}
+                        y={anchor.y - anchor.height / 2 - 0.12}
+                        width={anchor.width + 0.24}
+                        height={anchor.height + 0.24}
+                        rx={0.12}
+                        fill="rgba(255, 229, 154, 0.26)"
+                        stroke="#ffe59a"
+                        strokeWidth={0.08}
+                        pointerEvents="none"
+                      />
+                    )}
+                    <rect
+                      x={anchor.x - anchor.width / 2}
+                      y={anchor.y - anchor.height / 2}
+                      width={anchor.width}
+                      height={anchor.height}
+                      rx={0.04}
+                      fill="#ffe59a"
+                      stroke="#ffe59a"
+                      strokeWidth={0.06}
+                      pointerEvents="none"
+                    />
+                  </g>
+                ))}
 
-                {showRectZoneHint("rect-n") && (
-                  <line x1={x1} y1={y1} x2={x2} y2={y1} stroke={RESIZE_HINT_COLOR} strokeWidth={0.14} pointerEvents="none" />
-                )}
-                {showRectZoneHint("rect-s") && (
-                  <line x1={x1} y1={y2} x2={x2} y2={y2} stroke={RESIZE_HINT_COLOR} strokeWidth={0.14} pointerEvents="none" />
-                )}
-                {showRectZoneHint("rect-w") && (
-                  <line x1={x1} y1={y1} x2={x1} y2={y2} stroke={RESIZE_HINT_COLOR} strokeWidth={0.14} pointerEvents="none" />
-                )}
-                {showRectZoneHint("rect-e") && (
-                  <line x1={x2} y1={y1} x2={x2} y2={y2} stroke={RESIZE_HINT_COLOR} strokeWidth={0.14} pointerEvents="none" />
-                )}
-
-                <circle cx={midX} cy={y1} r={0.16} fill="#ffffff" stroke="#4f6862" strokeWidth={0.05} pointerEvents="none" />
-                <circle cx={midX} cy={y2} r={0.16} fill="#ffffff" stroke="#4f6862" strokeWidth={0.05} pointerEvents="none" />
-                <circle cx={x1} cy={midY} r={0.16} fill="#ffffff" stroke="#4f6862" strokeWidth={0.05} pointerEvents="none" />
-                <circle cx={x2} cy={midY} r={0.16} fill="#ffffff" stroke="#4f6862" strokeWidth={0.05} pointerEvents="none" />
-
-                {anchors.map((anchor) => (
+                {cornerAnchors.map((anchor) => (
                   <g key={`${anchor.handle}-${anchor.x}-${anchor.y}`}>
                     <circle
                       cx={anchor.x}
                       cy={anchor.y}
-                      r={1}
+                      r={RECT_RESIZE_CORNER_ANCHOR_RADIUS + RECT_RESIZE_HANDLE_HIT_SLOP}
                       fill="transparent"
                       style={{ cursor: canUseHandle(anchor.handle) ? anchor.cursor : "default" }}
                       onPointerEnter={() =>
@@ -8495,9 +9072,9 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
                       <circle
                         cx={anchor.x}
                         cy={anchor.y}
-                        r={0.44}
-                        fill="rgba(125, 232, 255, 0.24)"
-                        stroke={RESIZE_HINT_COLOR}
+                        r={RECT_RESIZE_CORNER_ANCHOR_RADIUS + 0.12}
+                        fill="rgba(255, 229, 154, 0.26)"
+                        stroke="#ffe59a"
                         strokeWidth={0.08}
                         pointerEvents="none"
                       />
@@ -8505,9 +9082,9 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
                     <circle
                       cx={anchor.x}
                       cy={anchor.y}
-                      r={0.3}
-                      fill="#ffffff"
-                      stroke="#4f6862"
+                      r={RECT_RESIZE_CORNER_ANCHOR_RADIUS}
+                      fill="#ffe59a"
+                      stroke="#ffe59a"
                       strokeWidth={0.06}
                       pointerEvents="none"
                     />
@@ -8950,21 +9527,47 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
         </button>
       )}
 
-      <button
-        type="button"
-        className="header-orientation-btn workspace-orientation-btn"
-        onPointerDown={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          cycleOrientation();
-        }}
-        aria-label="Cycle orientation"
-        title={`Orientation: ${state.project.orientation}`}
-      >
-        {state.project.orientation}
-      </button>
+      <div className="workspace-orientation-stack">
+        <div className="workspace-compass" aria-hidden="true">
+          <img src={compassIcon} alt="" className="workspace-compass-icon" />
+          {orientationCompassLabels.map((item) => (
+            <span
+              key={`compass-label-${item.direction}`}
+              className="workspace-compass-label"
+              style={{ left: `${item.xPercent}%`, top: `${item.yPercent}%` }}
+            >
+              {item.label}
+            </span>
+          ))}
+        </div>
 
-      <div className="workspace-camera-stack">
+        <button
+          type="button"
+          className="header-orientation-btn workspace-orientation-btn"
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            cycleOrientation();
+          }}
+          aria-label="Cycle orientation"
+          title={`Orientation: ${state.project.orientation}`}
+        >
+          {state.project.orientation}
+        </button>
+      </div>
+
+      <div
+        className="workspace-camera-stack"
+        onPointerDown={(event) => {
+          event.stopPropagation();
+        }}
+        onPointerMove={(event) => {
+          event.stopPropagation();
+        }}
+        onPointerUp={(event) => {
+          event.stopPropagation();
+        }}
+      >
         <button
           type="button"
           className={`workspace-floorplan-btn ${showSupportingFloorplan ? "is-active" : ""}`}
@@ -8983,7 +9586,10 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
           <img src={floorplanIcon} alt="" className="workspace-floorplan-btn-icon" />
         </button>
 
-        <div className={`workspace-camera-controls ${showCameraTools ? "" : "is-collapsed"}`} aria-label="Workspace camera controls">
+        <div
+          className={`workspace-camera-controls ${showCameraTools ? "" : "is-collapsed"}`}
+          aria-label="Workspace camera controls"
+        >
           {showCameraTools && (
             <>
               <div className="workspace-zoom-slider-wrap">
@@ -8993,6 +9599,15 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
                   max={MAX_ZOOM}
                   step={0.01}
                   value={state.camera.zoom}
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                  }}
+                  onPointerMove={(event) => {
+                    event.stopPropagation();
+                  }}
+                  onPointerUp={(event) => {
+                    event.stopPropagation();
+                  }}
                   onChange={(event) => handleZoomSliderChange(Number(event.target.value))}
                   className="workspace-zoom-slider"
                   aria-label="Zoom"

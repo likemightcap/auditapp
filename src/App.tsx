@@ -21,6 +21,7 @@ interface LevelModalState {
   floorId?: string;
   initialPreset: FloorPreset;
   initialUnconditioned: boolean;
+  showProjectNameField?: boolean;
 }
 
 interface DeleteLevelConfirmState {
@@ -279,6 +280,7 @@ function EditorShell() {
       mode: "create",
       initialPreset: defaultPreset,
       initialUnconditioned: false,
+      showProjectNameField: state.project.floors.length === 0,
     });
   };
 
@@ -301,6 +303,10 @@ function EditorShell() {
     }
 
     if (levelModalState.mode === "create") {
+      const nextProjectName = payload.projectName?.trim();
+      if (levelModalState.showProjectNameField && nextProjectName) {
+        dispatch({ type: "SET_PROJECT_NAME", projectName: nextProjectName });
+      }
       dispatch({
         type: "ADD_LEVEL",
         floorName: payload.name,
@@ -421,6 +427,8 @@ function EditorShell() {
         existingFloors={state.project.floors}
         initialPreset={levelModalState?.initialPreset ?? "FIRST_FLOOR"}
         initialUnconditioned={levelModalState?.initialUnconditioned ?? false}
+        showProjectNameField={Boolean(levelModalState?.showProjectNameField)}
+        initialProjectName={state.project.projectName}
         showDelete={levelModalState?.mode === "edit"}
         onCancel={() => setLevelModalState(null)}
         onSubmit={handleLevelSubmit}

@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { PDFDocument, StandardFonts, degrees, rgb } from "pdf-lib";
-import { calculateProjectMetrics } from "../utils/calculations";
+import { PDFDocument, PDFPage, PDFFont, PDFImage, StandardFonts, degrees, rgb } from "pdf-lib";
+import { calculateProjectDetailsReport, calculateProjectMetrics } from "../utils/calculations";
 import { useEditor } from "../state/EditorContext";
 import { createEntityFromTool } from "../state/editorReducer";
 import { TOOL_DEFINITIONS } from "../tools/toolDefinitions";
 import { exportProjectAsJson, importProjectFromJson } from "../utils/persistence";
 import { getUtilityIconByToolId, isUtilityToolId } from "../assets/utilityIcons";
+import compassIcon from "../../assets/svgs/compass-icon.svg";
 import doorToolIcon from "../../assets/building-icons/door.png";
 import doubleDoorToolIcon from "../../assets/building-icons/double-door.png";
 import slidingGlassToolIcon from "../../assets/building-icons/sliding-glass.png";
@@ -20,7 +21,7 @@ import { ExportPdfModal } from "./ExportPdfModal";
 import type { ExportPdfStyleOptions, ExportPdfThemePreset } from "./ExportPdfModal";
 import { GRAYSCALE_COLOR_TOKEN } from "./ExportPdfModal";
 import { MAX_ZOOM, MIN_ZOOM, clamp, screenToWorld, snapPointToGrid } from "../utils/geometry";
-import type { CameraState, FloorData, MapEntity, ToolId } from "../types";
+import type { CameraState, FloorData, MapEntity, Orientation, ToolId } from "../types";
 
 type DoorToolType = "single" | "double" | "sliding";
 
@@ -43,12 +44,31 @@ const RECTANGLE_TOOL_OPTIONS: Array<{ id: "rectangle" | "bumpout"; label: string
   { id: "bumpout", label: "BUMP OUT" },
 ];
 
+const ORIENTATION_LABELS: Record<Orientation, string> = {
+  N: "North",
+  NE: "Northeast",
+  E: "East",
+  SE: "Southeast",
+  S: "South",
+  SW: "Southwest",
+  W: "West",
+  NW: "Northwest",
+};
+
 function clampPositiveInt(value: number, fallback: number): number {
   const normalized = Number(value);
   if (!Number.isFinite(normalized)) {
     return fallback;
   }
   return Math.max(1, Math.round(normalized));
+}
+
+function toSafeFileBaseName(projectName: string): string {
+  const normalized = String(projectName ?? "")
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized || "home-layout";
 }
 
 interface UtilityDragState {
@@ -278,6 +298,16 @@ function applyExportThemePreset(svg: SVGSVGElement, preset: ExportPdfThemePreset
     recolorVisibleStrokes(svg, "#55606b");
     recolorAllText(svg, "#4e5760", "none");
 
+    for (const ceilingText of Array.from(svg.querySelectorAll<SVGTextElement>("text.ceiling-number, text.ceiling-caption"))) {
+      ceilingText.setAttribute("fill", "#ffffff");
+      ceilingText.style.setProperty("fill", "#ffffff", "important");
+      ceilingText.setAttribute("stroke", "none");
+      ceilingText.setAttribute("stroke-width", "0");
+      ceilingText.style.setProperty("stroke", "none", "important");
+      ceilingText.style.setProperty("stroke-width", "0", "important");
+      ceilingText.style.setProperty("paint-order", "normal", "important");
+    }
+
     for (const marker of Array.from(svg.querySelectorAll<SVGElement>(".rect-guides polygon, .rect-drag-size-cue polygon, .ceiling-overlay polygon"))) {
       marker.setAttribute("fill", "#55606b");
     }
@@ -313,6 +343,7 @@ function applyExportVisibilityOptions(svg: SVGSVGElement, options: ExportPdfStyl
   if (options.hideLabels) {
     removeElementsBySelector(svg, "text:not(.dim-label)");
     removeElementsBySelector(svg, ".ceiling-height-box");
+    removeElementsBySelector(svg, ".ceiling-height-badge");
   }
 
   if (options.hideUtilities) {
@@ -395,14 +426,308 @@ async function captureWorkspacePngDataUrl(svg: SVGSVGElement, options: ExportPdf
   }
 }
 
-async function downloadLevelsPdf(levels: LevelRender[], metrics: ReturnType<typeof calculateProjectMetrics>): Promise<void> {
+const COMPASS_RING: Orientation[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+
+interface PdfDetailLine {
+  text: string;
+  style: "title" | "section" | "subsection" | "row" | "spacer";
+}
+
+function wrapPdfText(text: string, font: PDFFont, fontSize: number, maxWidth: number): string[] {
+  const normalized = text.trim();
+  if (!normalized) {
+    return [""];
+  }
+
+  const words = normalized.split(/\s+/);
+  const lines: string[] = [];
+  let current = "";
+
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (font.widthOfTextAtSize(candidate, fontSize) <= maxWidth) {
+      current = candidate;
+      continue;
+    }
+
+    if (!current) {
+      let remaining = word;
+      while (remaining.length > 0) {
+        let sliceLength = remaining.length;
+        while (sliceLength > 1 && font.widthOfTextAtSize(remaining.slice(0, sliceLength), fontSize) > maxWidth) {
+          sliceLength -= 1;
+        }
+        lines.push(remaining.slice(0, sliceLength));
+        remaining = remaining.slice(sliceLength);
+      }
+      current = "";
+      continue;
+    }
+
+    lines.push(current);
+    current = word;
+  }
+
+  if (current) {
+    lines.push(current);
+  }
+  return lines.length > 0 ? lines : [""];
+}
+
+function drawPdfCompass(
+  page: PDFPage,
+  options: {
+    x: number;
+    y: number;
+    size: number;
+    orientation: Orientation;
+    font: PDFFont;
+    icon: PDFImage;
+    color: ReturnType<typeof rgb>;
+  },
+): void {
+  const { x, y, size, orientation, font, icon, color } = options;
+  const centerX = x + size / 2;
+  const centerY = y + size / 2;
+  const iconSize = size * 0.72;
+  const iconX = x + (size - iconSize) / 2;
+  const iconY = y + (size - iconSize) / 2;
+  const ringRadius = size * 0.43;
+  const orientationIndex = COMPASS_RING.indexOf(orientation);
+  const startIndex = orientationIndex >= 0 ? orientationIndex : COMPASS_RING.indexOf("S");
+
+  page.drawImage(icon, {
+    x: iconX,
+    y: iconY,
+    width: iconSize,
+    height: iconSize,
+  });
+
+  const labelSize = Math.max(5.5, size * 0.1);
+  for (let position = 0; position < 8; position += 1) {
+    const angle = (-90 + position * 45) * (Math.PI / 180);
+    const label = COMPASS_RING[(startIndex + position) % COMPASS_RING.length];
+    const lx = centerX + Math.cos(angle) * ringRadius;
+    const ly = centerY + Math.sin(angle) * ringRadius;
+    const width = font.widthOfTextAtSize(label, labelSize);
+    page.drawText(label, {
+      x: lx - width / 2,
+      y: ly - labelSize / 2,
+      size: labelSize,
+      font,
+      color,
+    });
+  }
+}
+
+async function createCompassIconPngDataUrl(size: number): Promise<string> {
+  const safeSize = Math.max(48, Math.round(size));
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const next = new Image();
+    next.onload = () => resolve(next);
+    next.onerror = () => reject(new Error("Unable to load compass icon for export."));
+    next.src = compassIcon;
+  });
+
+  const canvas = document.createElement("canvas");
+  canvas.width = safeSize;
+  canvas.height = safeSize;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("Unable to create compass icon canvas for export.");
+  }
+
+  context.clearRect(0, 0, safeSize, safeSize);
+  context.drawImage(image, 0, 0, safeSize, safeSize);
+  return canvas.toDataURL("image/png");
+}
+
+function buildPdfDetailsLines(report: ReturnType<typeof calculateProjectDetailsReport>): PdfDetailLine[] {
+  const lines: PdfDetailLine[] = [];
+  lines.push({ text: "TOTALS", style: "section" });
+  lines.push({ text: `Total ft²: ${report.totals.totalSqFt.toFixed(0)}`, style: "row" });
+  lines.push({ text: `Avg Ceiling Height: ${report.totals.averageCeilingHeightFt.toFixed(1)}'`, style: "row" });
+  lines.push({ text: `Total Volume: ${report.totals.totalVolumeFt3.toFixed(0)} ft³`, style: "row" });
+  lines.push({ text: `Front Door Orientation: ${ORIENTATION_LABELS[report.totals.frontDoorOrientation]} (${report.totals.frontDoorOrientation})`, style: "row" });
+  lines.push({ text: `Total Attic ft²: ${report.totals.totalAtticSqFt.toFixed(0)}`, style: "row" });
+  lines.push({ text: `Total Basement ft² (Basement label): ${report.totals.totalBasementSqFt.toFixed(0)}`, style: "row" });
+  lines.push({ text: `Total Crawlspace ft² (Crawlspace label): ${report.totals.totalCrawlspaceSqFt.toFixed(0)}`, style: "row" });
+  lines.push({ text: `Total Slab ft² (Slab label): ${report.totals.totalSlabSqFt.toFixed(0)}`, style: "row" });
+  lines.push({ text: "", style: "spacer" });
+
+  lines.push({ text: "OPENING SUMMARY", style: "section" });
+  lines.push({ text: `Total Windows: ${report.totals.totalWindowCount}`, style: "row" });
+  lines.push({ text: `Total Doors: ${report.totals.totalDoorCount}`, style: "row" });
+  lines.push({ text: `Total Window Area: ${report.totals.totalWindowAreaFt2.toFixed(0)} ft²`, style: "row" });
+  lines.push({ text: `Total Door Area: ${report.totals.totalDoorAreaFt2.toFixed(0)} ft²`, style: "row" });
+  lines.push({ text: "", style: "spacer" });
+
+  lines.push({ text: "FLOOR BREAKDOWN", style: "section" });
+  for (const floor of report.floorBreakdown) {
+    lines.push({ text: floor.floorName, style: "subsection" });
+    lines.push({ text: `Floor Total ft²: ${floor.totalAreaFt2.toFixed(0)}`, style: "row" });
+    lines.push({ text: `Conditioned ft²: ${floor.conditionedAreaFt2.toFixed(0)}`, style: "row" });
+    for (const rectangle of floor.rectangles) {
+      lines.push({
+        text: `• ${rectangle.conditioned ? rectangle.name : `${rectangle.name} (unconditioned)`}: ${rectangle.areaFt2.toFixed(0)} ft²`,
+        style: "row",
+      });
+    }
+  }
+  lines.push({ text: "", style: "spacer" });
+
+  lines.push({ text: "OVERHANGS", style: "section" });
+  lines.push({ text: `Total Overhang Areas: ${report.overhangs.totalAreaCount}`, style: "row" });
+  lines.push({ text: `Total Overhang ft²: ${report.overhangs.totalAreaFt2.toFixed(0)} ft²`, style: "row" });
+  for (const side of report.overhangs.bySide) {
+    lines.push({
+      text: `${ORIENTATION_LABELS[side.side]} (${side.side}): ${side.areaCount} (${side.totalAreaFt2.toFixed(0)} ft²)`,
+      style: "row",
+    });
+  }
+  for (const area of report.overhangs.areas) {
+    lines.push({
+      text: `• ${area.floorName} - ${ORIENTATION_LABELS[area.side]} (${area.side}): ${area.areaFt2.toFixed(0)} ft²`,
+      style: "row",
+    });
+  }
+  lines.push({ text: "", style: "spacer" });
+
+  lines.push({ text: "AREAS OVER UNCONDITIONED SPACE", style: "section" });
+  lines.push({ text: `Total Areas: ${report.overUnconditionedAreas.totalAreaCount}`, style: "row" });
+  lines.push({ text: `Total ft²: ${report.overUnconditionedAreas.totalAreaFt2.toFixed(0)} ft²`, style: "row" });
+  for (const area of report.overUnconditionedAreas.areas) {
+    lines.push({ text: `• ${area.floorName}: ${area.areaFt2.toFixed(0)} ft²`, style: "row" });
+  }
+  lines.push({ text: "", style: "spacer" });
+
+  lines.push({ text: "WINDOW + DOOR BY ORIENTATION SIDE", style: "section" });
+  for (const sideSummary of report.openingsBySide) {
+    lines.push({ text: `${ORIENTATION_LABELS[sideSummary.side]} (${sideSummary.side}) Side`, style: "subsection" });
+    lines.push({ text: `Total Openings: ${sideSummary.totalCount}`, style: "row" });
+    lines.push({ text: `Windows / Doors: ${sideSummary.windowCount} / ${sideSummary.doorCount}`, style: "row" });
+    lines.push({ text: `Total Window Area: ${sideSummary.totalWindowAreaFt2.toFixed(0)} ft²`, style: "row" });
+    lines.push({ text: `Total Door Area: ${sideSummary.totalDoorAreaFt2.toFixed(0)} ft²`, style: "row" });
+    lines.push({ text: `Total Opening Area: ${sideSummary.totalAreaFt2.toFixed(0)} ft²`, style: "row" });
+
+    const sizeBuckets = new Map<string, { count: number; totalAreaFt2: number }>();
+    for (const opening of sideSummary.openings) {
+      const key = `${opening.kind === "window" ? "Window" : "Door"} ${opening.sizeLabel}`;
+      const current = sizeBuckets.get(key) ?? { count: 0, totalAreaFt2: 0 };
+      sizeBuckets.set(key, {
+        count: current.count + 1,
+        totalAreaFt2: current.totalAreaFt2 + opening.areaFt2,
+      });
+    }
+
+    for (const [sizeKey, data] of sizeBuckets.entries()) {
+      lines.push({ text: `• ${sizeKey}: ${data.count} (${data.totalAreaFt2.toFixed(0)} ft²)`, style: "row" });
+    }
+
+    for (const opening of sideSummary.openings) {
+      lines.push({
+        text: `• ${opening.kind === "window" ? "Window" : "Door"} ${opening.sizeLabel} - ${opening.floorName}: ${opening.areaFt2.toFixed(0)} ft²`,
+        style: "row",
+      });
+    }
+  }
+
+  return lines;
+}
+
+function appendDetailsPages(
+  pdfDoc: PDFDocument,
+  details: ReturnType<typeof calculateProjectDetailsReport>,
+  projectName: string,
+  headerFont: PDFFont,
+  textFont: PDFFont,
+  pageWidth: number,
+  pageHeight: number,
+  color: ReturnType<typeof rgb>,
+): void {
+  const marginX = 34;
+  const topMargin = 74;
+  const bottomMargin = 36;
+  const gutter = 20;
+  const columnWidth = (pageWidth - marginX * 2 - gutter) / 2;
+  const title = `${(projectName || "NEW ASSESSMENT").toUpperCase()} - DETAILED REPORT`;
+  const lines = buildPdfDetailsLines(details);
+
+  let page = pdfDoc.addPage([pageWidth, pageHeight]);
+  let column = 0;
+  let cursorY = pageHeight - topMargin;
+
+  const resetForNewPage = (continued: boolean) => {
+    page = pdfDoc.addPage([pageWidth, pageHeight]);
+    column = 0;
+    cursorY = pageHeight - topMargin;
+    page.drawText(continued ? `${title} (CONT.)` : title, {
+      x: marginX,
+      y: pageHeight - 46,
+      size: 15,
+      font: headerFont,
+      color,
+    });
+  };
+
+  page.drawText(title, {
+    x: marginX,
+    y: pageHeight - 46,
+    size: 15,
+    font: headerFont,
+    color,
+  });
+
+  for (const line of lines) {
+    const isTitle = line.style === "title";
+    const isSection = line.style === "section";
+    const isSubsection = line.style === "subsection";
+    const isSpacer = line.style === "spacer";
+    const font = isTitle || isSection || isSubsection ? headerFont : textFont;
+    const size = isTitle ? 13 : isSection ? 10 : isSubsection ? 9 : 8;
+    const lineHeight = isSpacer ? 6 : size + (isSection ? 4 : 2);
+    const wrapped = isSpacer ? [""] : wrapPdfText(line.text, font, size, columnWidth);
+    const neededHeight = wrapped.length * lineHeight;
+
+    if (cursorY - neededHeight < bottomMargin) {
+      if (column === 0) {
+        column = 1;
+        cursorY = pageHeight - topMargin;
+      } else {
+        resetForNewPage(true);
+      }
+    }
+
+    const x = marginX + (column === 1 ? columnWidth + gutter : 0);
+    for (const wrappedLine of wrapped) {
+      if (wrappedLine) {
+        page.drawText(wrappedLine, {
+          x,
+          y: cursorY,
+          size,
+          font,
+          color,
+        });
+      }
+      cursorY -= lineHeight;
+    }
+  }
+}
+
+async function downloadLevelsPdf(
+  levels: LevelRender[],
+  details: ReturnType<typeof calculateProjectDetailsReport>,
+  projectName: string,
+): Promise<void> {
   const pdfDoc = await PDFDocument.create();
   const headerFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-  const textFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+  const textFont = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const pageWidth = 612;
   const pageHeight = 792;
   const navy = rgb(0.13, 0.22, 0.37);
   const pages = Math.max(1, Math.ceil(levels.length / 2));
+  const compassPngDataUrl = await createCompassIconPngDataUrl(120);
+  const compassIconImage = await pdfDoc.embedPng(compassPngDataUrl);
 
   for (let pageIndex = 0; pageIndex < pages; pageIndex += 1) {
     const page = pdfDoc.addPage([pageWidth, pageHeight]);
@@ -422,33 +747,13 @@ async function downloadLevelsPdf(levels: LevelRender[], metrics: ReturnType<type
       color: navy,
     });
 
-    const detailSize = 13;
-    const detailX = pageWidth - 210;
-    page.drawText(`${metrics.conditionedAreaFt2.toFixed(0)} :TOTAL FT²`, {
-      x: detailX,
-      y: pageHeight - 34,
-      size: detailSize,
-      font: textFont,
-      color: navy,
-    });
-    page.drawText(`${metrics.averageCeilingHeightFt.toFixed(1)} :AVERAGE CEILING HEIGHT`, {
-      x: detailX,
+    const titleRight = (projectName || "NEW ASSESSMENT").toUpperCase();
+    const titleRightSize = 13;
+    const titleRightWidth = textFont.widthOfTextAtSize(titleRight, titleRightSize);
+    page.drawText(titleRight, {
+      x: Math.max(250, pageWidth - 30 - titleRightWidth),
       y: pageHeight - 52,
-      size: detailSize,
-      font: textFont,
-      color: navy,
-    });
-    page.drawText(`${metrics.volumeFt3.toFixed(0)} :TOTAL VOLUME`, {
-      x: detailX,
-      y: pageHeight - 70,
-      size: detailSize,
-      font: textFont,
-      color: navy,
-    });
-    page.drawText(`${metrics.totalAtticAreaFt2.toFixed(0)} :TOTAL ATTIC FT²`, {
-      x: detailX,
-      y: pageHeight - 88,
-      size: detailSize,
+      size: titleRightSize,
       font: textFont,
       color: navy,
     });
@@ -497,15 +802,27 @@ async function downloadLevelsPdf(levels: LevelRender[], metrics: ReturnType<type
         width: targetWidth,
         height: targetHeight,
       });
+
+      drawPdfCompass(page, {
+        x: x + 8,
+        y: y + 8,
+        size: Math.min(64, Math.max(44, targetWidth * 0.12)),
+        orientation: details.totals.frontDoorOrientation,
+        font: textFont,
+        icon: compassIconImage,
+        color: navy,
+      });
     }
   }
+
+  appendDetailsPages(pdfDoc, details, projectName, headerFont, textFont, pageWidth, pageHeight, navy);
 
   const bytes = await pdfDoc.save();
   const pdfBytes = new Uint8Array(bytes);
   const blob = new Blob([pdfBytes], { type: "application/pdf" });
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
-  link.download = "home-layout-export.pdf";
+  link.download = `${toSafeFileBaseName(projectName)}.pdf`;
   link.click();
   URL.revokeObjectURL(link.href);
 }
@@ -936,11 +1253,15 @@ interface LeftToolbarProps {
 export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
   const { state, dispatch } = useEditor();
   const metrics = calculateProjectMetrics(state.project, state.previewEntity);
+  const detailsReport = useMemo(() => calculateProjectDetailsReport(state.project), [state.project]);
   const defaultDoorType = getDoorToolTypeFromProjectMetadata(state.project.metadata);
   const [windowToolModalOpen, setWindowToolModalOpen] = useState(false);
   const [utilityDrag, setUtilityDrag] = useState<UtilityDragState | null>(null);
   const [utilityLabelModalState, setUtilityLabelModalState] = useState<UtilityLabelModalState | null>(null);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [isDetailsModalOpen, setIsDetailsModalOpen] = useState(false);
+  const [isRenameProjectModalOpen, setIsRenameProjectModalOpen] = useState(false);
+  const [renameProjectDraft, setRenameProjectDraft] = useState("");
   const [isExportPdfModalOpen, setIsExportPdfModalOpen] = useState(false);
   const [exportPreviewImageUrl, setExportPreviewImageUrl] = useState<string | null>(null);
   const [exportPreviewLoading, setExportPreviewLoading] = useState(false);
@@ -1125,6 +1446,44 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
     />
   );
 
+  const renameProjectModal = (
+    <div className="modal-backdrop" onPointerDown={() => setIsRenameProjectModalOpen(false)}>
+      <section className="text-modal" onPointerDown={(event) => event.stopPropagation()}>
+        <h2>RENAME PROJECT</h2>
+        <div className="modal-row">
+          <label htmlFor="renameProjectName">PROJECT NAME:</label>
+          <input
+            id="renameProjectName"
+            className="text-content-input"
+            value={renameProjectDraft}
+            onChange={(event) => setRenameProjectDraft(event.target.value)}
+            placeholder="Enter project name"
+            autoFocus
+          />
+        </div>
+        <div className="modal-actions level-modal-actions">
+          <button
+            type="button"
+            className="okay"
+            onClick={() => {
+              const trimmed = renameProjectDraft.trim();
+              if (!trimmed) {
+                return;
+              }
+              dispatch({ type: "SET_PROJECT_NAME", projectName: trimmed });
+              setIsRenameProjectModalOpen(false);
+            }}
+          >
+            SAVE
+          </button>
+          <button type="button" className="cancel" onClick={() => setIsRenameProjectModalOpen(false)}>
+            CANCEL
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+
   const exportPdf = async (options: ExportPdfStyleOptions) => {
     if (isExportingPdf || state.project.floors.length === 0) {
       return;
@@ -1176,7 +1535,7 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
         levelRenders.push({ name: floor.name, pngDataUrl });
       }
 
-      await downloadLevelsPdf(levelRenders, metrics);
+      await downloadLevelsPdf(levelRenders, detailsReport, state.project.projectName || "NEW ASSESSMENT");
     } catch (error) {
       console.error(error);
       window.alert("PDF export failed. Please try again.");
@@ -1291,14 +1650,10 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
   const saveProjectToDevice = () => {
     const json = exportProjectAsJson(state.project);
     const blob = new Blob([json], { type: "application/json" });
-    const safeName = (state.project.projectName || "home-layout")
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "home-layout";
+    const safeName = toSafeFileBaseName(state.project.projectName || "home-layout");
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = `${safeName}.audit.json`;
+    link.download = `${safeName}.json`;
     link.click();
     URL.revokeObjectURL(link.href);
   };
@@ -1376,6 +1731,7 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
       {!collapsed && (
         <section className="details-panel">
           <h3>PROJECT DETAILS</h3>
+          <div className="details-project-name">{state.project.projectName || "NEW ASSESSMENT"}</div>
           <div className="stats-row">
             <span>Total Ft²</span>
             <strong>{metrics.conditionedAreaFt2.toFixed(0)}</strong>
@@ -1388,10 +1744,9 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
             <span>Total Volume</span>
             <strong>{metrics.volumeFt3.toFixed(0)}</strong>
           </div>
-          <div className="stats-row">
-            <span>Total Attic ft²</span>
-            <strong>{metrics.totalAtticAreaFt2.toFixed(0)}</strong>
-          </div>
+          <button type="button" className="view-all-details-btn" onClick={() => setIsDetailsModalOpen(true)}>
+            VIEW ALL DETAILS
+          </button>
         </section>
       )}
 
@@ -1466,6 +1821,239 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
 
       {typeof document !== "undefined" ? createPortal(windowToolModal, document.body) : windowToolModal}
       {typeof document !== "undefined" ? createPortal(utilityLabelModal, document.body) : utilityLabelModal}
+      {isRenameProjectModalOpen && typeof document !== "undefined"
+        ? createPortal(renameProjectModal, document.body)
+        : null}
+      {isDetailsModalOpen && typeof document !== "undefined"
+        ? createPortal(
+            <div className="modal-backdrop" onPointerDown={() => setIsDetailsModalOpen(false)}>
+              <section className="text-modal details-breakdown-modal" onPointerDown={(event) => event.stopPropagation()}>
+                <div className="details-modal-header-row">
+                  <div className="details-modal-project-name">{state.project.projectName || "NEW ASSESSMENT"}</div>
+                  <button
+                    type="button"
+                    className="view-all-details-btn details-modal-rename-btn"
+                    onClick={() => {
+                      setRenameProjectDraft(state.project.projectName || "New Assessment");
+                      setIsRenameProjectModalOpen(true);
+                    }}
+                  >
+                    RENAME PROJECT
+                  </button>
+                </div>
+                <h2>TOTALS + LAYOUT DETAILS</h2>
+
+                <section className="details-section">
+                  <h3>TOTALS</h3>
+                  <div className="details-breakdown-row">
+                    <span>Total ft²</span>
+                    <strong>{detailsReport.totals.totalSqFt.toFixed(0)}</strong>
+                  </div>
+                  <div className="details-breakdown-row">
+                    <span>Avg Ceiling Height</span>
+                    <strong>{detailsReport.totals.averageCeilingHeightFt.toFixed(1)}'</strong>
+                  </div>
+                  <div className="details-breakdown-row">
+                    <span>Total Volume</span>
+                    <strong>{detailsReport.totals.totalVolumeFt3.toFixed(0)} ft³</strong>
+                  </div>
+                  <div className="details-breakdown-row">
+                    <span>Front Door Orientation</span>
+                    <strong>
+                      {ORIENTATION_LABELS[detailsReport.totals.frontDoorOrientation]} ({detailsReport.totals.frontDoorOrientation})
+                    </strong>
+                  </div>
+                  <div className="details-breakdown-row">
+                    <span>Total Attic ft²</span>
+                    <strong>{detailsReport.totals.totalAtticSqFt.toFixed(0)}</strong>
+                  </div>
+                  <div className="details-breakdown-row">
+                    <span>Total Basement ft² (Basement label)</span>
+                    <strong>{detailsReport.totals.totalBasementSqFt.toFixed(0)}</strong>
+                  </div>
+                  <div className="details-breakdown-row">
+                    <span>Total Crawlspace ft² (Crawlspace label)</span>
+                    <strong>{detailsReport.totals.totalCrawlspaceSqFt.toFixed(0)}</strong>
+                  </div>
+                  <div className="details-breakdown-row">
+                    <span>Total Slab ft² (Slab label)</span>
+                    <strong>{detailsReport.totals.totalSlabSqFt.toFixed(0)}</strong>
+                  </div>
+                </section>
+
+                <section className="details-section">
+                  <h3>OPENING SUMMARY</h3>
+                  <div className="details-breakdown-row">
+                    <span>Total Windows</span>
+                    <strong>{detailsReport.totals.totalWindowCount}</strong>
+                  </div>
+                  <div className="details-breakdown-row">
+                    <span>Total Doors</span>
+                    <strong>{detailsReport.totals.totalDoorCount}</strong>
+                  </div>
+                  <div className="details-breakdown-row">
+                    <span>Total Window Area</span>
+                    <strong>{detailsReport.totals.totalWindowAreaFt2.toFixed(0)} ft²</strong>
+                  </div>
+                  <div className="details-breakdown-row">
+                    <span>Total Door Area</span>
+                    <strong>{detailsReport.totals.totalDoorAreaFt2.toFixed(0)} ft²</strong>
+                  </div>
+                </section>
+
+                <section className="details-section">
+                  <h3>FLOOR BREAKDOWN</h3>
+                  {detailsReport.floorBreakdown.map((floor) => (
+                    <div key={`floor-breakdown-${floor.floorId}`} className="details-card">
+                      <div className="details-card-title">{floor.floorName}</div>
+                      <div className="details-breakdown-row">
+                        <span>Floor Total ft²</span>
+                        <strong>{floor.totalAreaFt2.toFixed(0)}</strong>
+                      </div>
+                      <div className="details-breakdown-row">
+                        <span>Conditioned ft²</span>
+                        <strong>{floor.conditionedAreaFt2.toFixed(0)}</strong>
+                      </div>
+                      {floor.rectangles.map((rectangle) => (
+                        <div key={rectangle.id} className="details-breakdown-row details-breakdown-row-indent">
+                          <span>{rectangle.conditioned ? rectangle.name : `${rectangle.name} (unconditioned)`}</span>
+                          <strong>{rectangle.areaFt2.toFixed(0)} ft²</strong>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </section>
+
+                <section className="details-section">
+                  <h3>OVERHANGS</h3>
+                  <div className="details-breakdown-row">
+                    <span>Total Overhang Areas</span>
+                    <strong>{detailsReport.overhangs.totalAreaCount}</strong>
+                  </div>
+                  <div className="details-breakdown-row">
+                    <span>Total Overhang ft²</span>
+                    <strong>{detailsReport.overhangs.totalAreaFt2.toFixed(0)} ft²</strong>
+                  </div>
+
+                  {detailsReport.overhangs.bySide.map((side) => (
+                    <div key={`overhang-side-${side.side}`} className="details-breakdown-row details-breakdown-row-indent">
+                      <span>
+                        {ORIENTATION_LABELS[side.side]} ({side.side})
+                      </span>
+                      <strong>
+                        {side.areaCount} ({side.totalAreaFt2.toFixed(0)} ft²)
+                      </strong>
+                    </div>
+                  ))}
+
+                  {detailsReport.overhangs.areas.map((area, index) => (
+                    <div
+                      key={`overhang-area-${area.floorId}-${index}`}
+                      className="details-breakdown-row details-breakdown-row-indent details-breakdown-row-fine"
+                    >
+                      <span>
+                        {area.floorName} • {ORIENTATION_LABELS[area.side]} ({area.side})
+                      </span>
+                      <strong>{area.areaFt2.toFixed(0)} ft²</strong>
+                    </div>
+                  ))}
+                </section>
+
+                <section className="details-section">
+                  <h3>AREAS OVER UNCONDITIONED SPACE</h3>
+                  <div className="details-breakdown-row">
+                    <span>Total Areas</span>
+                    <strong>{detailsReport.overUnconditionedAreas.totalAreaCount}</strong>
+                  </div>
+                  <div className="details-breakdown-row">
+                    <span>Total ft²</span>
+                    <strong>{detailsReport.overUnconditionedAreas.totalAreaFt2.toFixed(0)} ft²</strong>
+                  </div>
+
+                  {detailsReport.overUnconditionedAreas.areas.map((area, index) => (
+                    <div
+                      key={`over-unconditioned-area-${area.floorId}-${index}`}
+                      className="details-breakdown-row details-breakdown-row-indent details-breakdown-row-fine"
+                    >
+                      <span>{area.floorName}</span>
+                      <strong>{area.areaFt2.toFixed(0)} ft²</strong>
+                    </div>
+                  ))}
+                </section>
+
+                <section className="details-section">
+                  <h3>WINDOW + DOOR BY ORIENTATION SIDE</h3>
+                  {detailsReport.openingsBySide.map((sideSummary) => {
+                    const sizeBuckets = new Map<string, { count: number; totalAreaFt2: number }>();
+                    for (const opening of sideSummary.openings) {
+                      const key = `${opening.kind === "window" ? "Window" : "Door"} ${opening.sizeLabel}`;
+                      const current = sizeBuckets.get(key) ?? { count: 0, totalAreaFt2: 0 };
+                      sizeBuckets.set(key, {
+                        count: current.count + 1,
+                        totalAreaFt2: current.totalAreaFt2 + opening.areaFt2,
+                      });
+                    }
+
+                    return (
+                      <div key={`side-summary-${sideSummary.side}`} className="details-card">
+                        <div className="details-card-title">
+                          {ORIENTATION_LABELS[sideSummary.side]} ({sideSummary.side}) Side
+                        </div>
+                        <div className="details-breakdown-row">
+                          <span>Total Openings</span>
+                          <strong>{sideSummary.totalCount}</strong>
+                        </div>
+                        <div className="details-breakdown-row">
+                          <span>Windows / Doors</span>
+                          <strong>
+                            {sideSummary.windowCount} / {sideSummary.doorCount}
+                          </strong>
+                        </div>
+                        <div className="details-breakdown-row">
+                          <span>Total Window Area</span>
+                          <strong>{sideSummary.totalWindowAreaFt2.toFixed(0)} ft²</strong>
+                        </div>
+                        <div className="details-breakdown-row">
+                          <span>Total Door Area</span>
+                          <strong>{sideSummary.totalDoorAreaFt2.toFixed(0)} ft²</strong>
+                        </div>
+                        <div className="details-breakdown-row">
+                          <span>Total Opening Area</span>
+                          <strong>{sideSummary.totalAreaFt2.toFixed(0)} ft²</strong>
+                        </div>
+
+                        {[...sizeBuckets.entries()].map(([sizeKey, data]) => (
+                          <div key={`${sideSummary.side}-${sizeKey}`} className="details-breakdown-row details-breakdown-row-indent">
+                            <span>{sizeKey}</span>
+                            <strong>
+                              {data.count} ({data.totalAreaFt2.toFixed(0)} ft²)
+                            </strong>
+                          </div>
+                        ))}
+
+                        {sideSummary.openings.map((opening, index) => (
+                          <div key={`${opening.id}-${index}`} className="details-breakdown-row details-breakdown-row-indent details-breakdown-row-fine">
+                            <span>
+                              {opening.kind === "window" ? "Window" : "Door"} {opening.sizeLabel} • {opening.floorName}
+                            </span>
+                            <strong>{opening.areaFt2.toFixed(0)} ft²</strong>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </section>
+
+                <div className="modal-actions level-modal-actions">
+                  <button type="button" className="cancel" onClick={() => setIsDetailsModalOpen(false)}>
+                    CLOSE
+                  </button>
+                </div>
+              </section>
+            </div>,
+            document.body,
+          )
+        : null}
       {typeof document !== "undefined" ? createPortal(
         <ExportPdfModal
           isOpen={isExportPdfModalOpen}
