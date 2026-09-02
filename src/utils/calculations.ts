@@ -447,7 +447,74 @@ function sideOrientationsFromFront(front: Orientation): Orientation[] {
   const frontIndex = ORIENTATION_ORDER.indexOf(front);
   const safeIndex = frontIndex >= 0 ? frontIndex : ORIENTATION_ORDER.indexOf("S");
   const index = safeIndex >= 0 ? safeIndex : 0;
-  return [0, 2, 4, 6].map((offset) => ORIENTATION_ORDER[(index + offset) % ORIENTATION_ORDER.length]);
+  return [0, 6, 4, 2].map((offset) => ORIENTATION_ORDER[(index + offset) % ORIENTATION_ORDER.length]);
+}
+
+function computeFloorLayoutBounds(floor: FloorData): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+
+  for (const entity of floor.entities) {
+    if (entity.type === "rectangle") {
+      const bounds = rectBounds(entity);
+      minX = Math.min(minX, bounds.x1);
+      minY = Math.min(minY, bounds.y1);
+      maxX = Math.max(maxX, bounds.x2);
+      maxY = Math.max(maxY, bounds.y2);
+      continue;
+    }
+
+    if (entity.type === "window" || entity.type === "door") {
+      minX = Math.min(minX, entity.x);
+      minY = Math.min(minY, entity.y);
+      maxX = Math.max(maxX, entity.x);
+      maxY = Math.max(maxY, entity.y);
+    }
+  }
+
+  for (const point of floor.wallPoints) {
+    minX = Math.min(minX, point.x);
+    minY = Math.min(minY, point.y);
+    maxX = Math.max(maxX, point.x);
+    maxY = Math.max(maxY, point.y);
+  }
+
+  if (!Number.isFinite(minX) || !Number.isFinite(minY) || !Number.isFinite(maxX) || !Number.isFinite(maxY)) {
+    return null;
+  }
+
+  return { minX, minY, maxX, maxY };
+}
+
+function openingSideFromLayout(
+  opening: MapEntity,
+  floorBounds: { minX: number; minY: number; maxX: number; maxY: number } | null,
+  sideOrientations: Orientation[],
+): Orientation {
+  if (!floorBounds || sideOrientations.length < 4) {
+    const facingFallback = facingFromRotation(opening.rotation);
+    return nearestSideOrientation(facingFallback, sideOrientations);
+  }
+
+  const [bottomSide, rightSide, topSide, leftSide] = sideOrientations;
+  const centerX = opening.x;
+  const centerY = opening.y;
+  const distanceBottom = Math.abs(floorBounds.maxY - centerY);
+  const distanceRight = Math.abs(floorBounds.maxX - centerX);
+  const distanceTop = Math.abs(centerY - floorBounds.minY);
+  const distanceLeft = Math.abs(centerX - floorBounds.minX);
+
+  const rotationRadians = (opening.rotation * Math.PI) / 180;
+  const axisX = Math.abs(Math.cos(rotationRadians));
+  const axisY = Math.abs(Math.sin(rotationRadians));
+
+  // Always classify by the dominant opening axis first, then pick nearest edge within that family.
+  if (axisX >= axisY) {
+    return distanceBottom <= distanceTop ? bottomSide : topSide;
+  }
+  return distanceRight <= distanceLeft ? rightSide : leftSide;
 }
 
 type DuplicateBaselineMode = "outside-baseline" | "inside-baseline";
@@ -896,6 +963,7 @@ export function calculateProjectDetailsReport(project: Project): ProjectDetailsR
   const orderedFloors = sortFloorsByPresetOrder(project.floors);
   for (let floorIndex = 0; floorIndex < orderedFloors.length; floorIndex += 1) {
     const floor = orderedFloors[floorIndex];
+    const floorBounds = computeFloorLayoutBounds(floor);
     const floorPreset = floor.floorPreset ?? inferFloorPresetFromName(floor.name);
     const rectangles = floor.entities.filter((entity) => entity.type === "rectangle");
     const floorConditionedAreaFt2 = conditionedRectangleCells(floor).size;
@@ -984,7 +1052,7 @@ export function calculateProjectDetailsReport(project: Project): ProjectDetailsR
       const heightFt = Math.abs(opening.height);
       const areaFt2 = widthFt * heightFt;
       const facing = facingFromRotation(opening.rotation);
-      const side = nearestSideOrientation(facing, sideOrientations);
+      const side = openingSideFromLayout(opening, floorBounds, sideOrientations);
       const details: OpeningDetails = {
         id: opening.id,
         floorId: floor.id,

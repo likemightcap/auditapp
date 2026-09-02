@@ -427,10 +427,20 @@ async function captureWorkspacePngDataUrl(svg: SVGSVGElement, options: ExportPdf
 }
 
 const COMPASS_RING: Orientation[] = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+const COMPASS_LABEL_POSITIONS: Array<{ xPercent: number; yPercent: number }> = [
+  { xPercent: 50, yPercent: 8 },
+  { xPercent: 76, yPercent: 20 },
+  { xPercent: 89, yPercent: 49 },
+  { xPercent: 76, yPercent: 78 },
+  { xPercent: 50, yPercent: 91 },
+  { xPercent: 24, yPercent: 78 },
+  { xPercent: 11, yPercent: 49 },
+  { xPercent: 24, yPercent: 20 },
+];
 
 interface PdfDetailLine {
   text: string;
-  style: "title" | "section" | "subsection" | "row" | "spacer";
+  style: "section" | "subsection" | "row" | "spacer";
 }
 
 function wrapPdfText(text: string, font: PDFFont, fontSize: number, maxWidth: number): string[] {
@@ -487,14 +497,11 @@ function drawPdfCompass(
   },
 ): void {
   const { x, y, size, orientation, font, icon, color } = options;
-  const centerX = x + size / 2;
-  const centerY = y + size / 2;
   const iconSize = size * 0.72;
   const iconX = x + (size - iconSize) / 2;
   const iconY = y + (size - iconSize) / 2;
-  const ringRadius = size * 0.43;
   const orientationIndex = COMPASS_RING.indexOf(orientation);
-  const startIndex = orientationIndex >= 0 ? orientationIndex : COMPASS_RING.indexOf("S");
+  const startIndex = orientationIndex >= 0 ? (orientationIndex - 4 + COMPASS_RING.length) % COMPASS_RING.length : 0;
 
   page.drawImage(icon, {
     x: iconX,
@@ -504,11 +511,11 @@ function drawPdfCompass(
   });
 
   const labelSize = Math.max(5.5, size * 0.1);
-  for (let position = 0; position < 8; position += 1) {
-    const angle = (-90 + position * 45) * (Math.PI / 180);
+  for (let position = 0; position < COMPASS_LABEL_POSITIONS.length; position += 1) {
+    const point = COMPASS_LABEL_POSITIONS[position];
     const label = COMPASS_RING[(startIndex + position) % COMPASS_RING.length];
-    const lx = centerX + Math.cos(angle) * ringRadius;
-    const ly = centerY + Math.sin(angle) * ringRadius;
+    const lx = x + (point.xPercent / 100) * size;
+    const ly = y + (1 - point.yPercent / 100) * size;
     const width = font.widthOfTextAtSize(label, labelSize);
     page.drawText(label, {
       x: lx - width / 2,
@@ -679,12 +686,11 @@ function appendDetailsPages(
   });
 
   for (const line of lines) {
-    const isTitle = line.style === "title";
     const isSection = line.style === "section";
     const isSubsection = line.style === "subsection";
     const isSpacer = line.style === "spacer";
-    const font = isTitle || isSection || isSubsection ? headerFont : textFont;
-    const size = isTitle ? 13 : isSection ? 10 : isSubsection ? 9 : 8;
+    const font = isSection || isSubsection ? headerFont : textFont;
+    const size = isSection ? 10 : isSubsection ? 9 : 8;
     const lineHeight = isSpacer ? 6 : size + (isSection ? 4 : 2);
     const wrapped = isSpacer ? [""] : wrapPdfText(line.text, font, size, columnWidth);
     const neededHeight = wrapped.length * lineHeight;

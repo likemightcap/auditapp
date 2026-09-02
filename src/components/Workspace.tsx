@@ -5016,7 +5016,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
         return;
       }
       dispatch({ type: "UPSERT_ENTITY", entity: placed });
-      dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: placed.id } });
+      dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
       maybeAutoReturnToSelect(tool.entityType);
       return;
     }
@@ -6395,7 +6395,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
         return;
       }
       dispatch({ type: "UPSERT_ENTITY", entity: placed });
-      dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: placed.id } });
+      dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
       maybeAutoReturnToSelect("door");
       return;
     }
@@ -6423,7 +6423,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
         return;
       }
       dispatch({ type: "UPSERT_ENTITY", entity: placed });
-      dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: placed.id } });
+      dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
       maybeAutoReturnToSelect("window");
       return;
     }
@@ -9194,87 +9194,138 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
             const y2 = selectedSkylightEntity.y + selectedSkylightEntity.height / 2;
             const midX = (x1 + x2) / 2;
             const midY = (y1 + y2) / 2;
-            const anchors: Array<{ x: number; y: number; handle: ResizeHandle; cursor: string }> = [
-              { x: x1, y: y1, handle: "nw", cursor: "nwse-resize" },
-              { x: x2, y: y1, handle: "ne", cursor: "nesw-resize" },
-              { x: x1, y: y2, handle: "sw", cursor: "nesw-resize" },
-              { x: x2, y: y2, handle: "se", cursor: "nwse-resize" },
+            const activeRectZone =
+              resizeHint?.entityId === selectedSkylightEntity.id ? resizeHint.zone : null;
+            const isActiveSkylightResize =
+              interactionRef.current.type === "resize-rect" && interactionRef.current.targetId === selectedSkylightEntity.id;
+            const activeRectResizeZone = isActiveSkylightResize
+              ? (`rect-${interactionRef.current.resizeHandle}` as ResizeHintZone)
+              : null;
+            const showRectZoneHint = (zone: ResizeHintZone) =>
+              activeRectZone === zone || activeRectResizeZone === zone;
+
+            const horizontalAnchorLength = Math.max(1.6, Math.abs(selectedSkylightEntity.width) * 0.75);
+            const verticalAnchorLength = Math.max(1.6, Math.abs(selectedSkylightEntity.height) * 0.75);
+            const edgeAnchors: Array<{
+              x: number;
+              y: number;
+              handle: ResizeHandle;
+              cursor: string;
+              width: number;
+              height: number;
+            }> = [
+              {
+                x: midX,
+                y: y1 - RECT_RESIZE_HANDLE_OUTSET,
+                handle: "n",
+                cursor: "ns-resize",
+                width: horizontalAnchorLength,
+                height: RECT_RESIZE_ANCHOR_THICKNESS,
+              },
+              {
+                x: midX,
+                y: y2 + RECT_RESIZE_HANDLE_OUTSET,
+                handle: "s",
+                cursor: "ns-resize",
+                width: horizontalAnchorLength,
+                height: RECT_RESIZE_ANCHOR_THICKNESS,
+              },
+              {
+                x: x1 - RECT_RESIZE_HANDLE_OUTSET,
+                y: midY,
+                handle: "w",
+                cursor: "ew-resize",
+                width: RECT_RESIZE_ANCHOR_THICKNESS,
+                height: verticalAnchorLength,
+              },
+              {
+                x: x2 + RECT_RESIZE_HANDLE_OUTSET,
+                y: midY,
+                handle: "e",
+                cursor: "ew-resize",
+                width: RECT_RESIZE_ANCHOR_THICKNESS,
+                height: verticalAnchorLength,
+              },
+            ];
+            const cornerAnchors: Array<{ x: number; y: number; handle: ResizeHandle; cursor: string }> = [
+              { x: x1 - RECT_RESIZE_HANDLE_OUTSET, y: y1 - RECT_RESIZE_HANDLE_OUTSET, handle: "nw", cursor: "nwse-resize" },
+              { x: x2 + RECT_RESIZE_HANDLE_OUTSET, y: y1 - RECT_RESIZE_HANDLE_OUTSET, handle: "ne", cursor: "nesw-resize" },
+              { x: x1 - RECT_RESIZE_HANDLE_OUTSET, y: y2 + RECT_RESIZE_HANDLE_OUTSET, handle: "sw", cursor: "nesw-resize" },
+              { x: x2 + RECT_RESIZE_HANDLE_OUTSET, y: y2 + RECT_RESIZE_HANDLE_OUTSET, handle: "se", cursor: "nwse-resize" },
             ];
 
             return (
               <g className="rect-resize-controls">
-                <line
-                  x1={x1}
-                  y1={y1}
-                  x2={x2}
-                  y2={y1}
-                  stroke="transparent"
-                  strokeWidth={2}
-                  style={{ cursor: "ns-resize" }}
-                  onPointerEnter={() => setResizeHintZone(selectedSkylightEntity.id, "rect-n")}
-                  onPointerLeave={() => clearResizeHintZone(selectedSkylightEntity.id, "rect-n")}
-                  onPointerDown={(event) => startSkylightResize(event, selectedSkylightEntity, "n")}
-                />
-                <line
-                  x1={x1}
-                  y1={y2}
-                  x2={x2}
-                  y2={y2}
-                  stroke="transparent"
-                  strokeWidth={2}
-                  style={{ cursor: "ns-resize" }}
-                  onPointerEnter={() => setResizeHintZone(selectedSkylightEntity.id, "rect-s")}
-                  onPointerLeave={() => clearResizeHintZone(selectedSkylightEntity.id, "rect-s")}
-                  onPointerDown={(event) => startSkylightResize(event, selectedSkylightEntity, "s")}
-                />
-                <line
-                  x1={x1}
-                  y1={y1}
-                  x2={x1}
-                  y2={y2}
-                  stroke="transparent"
-                  strokeWidth={2}
-                  style={{ cursor: "ew-resize" }}
-                  onPointerEnter={() => setResizeHintZone(selectedSkylightEntity.id, "rect-w")}
-                  onPointerLeave={() => clearResizeHintZone(selectedSkylightEntity.id, "rect-w")}
-                  onPointerDown={(event) => startSkylightResize(event, selectedSkylightEntity, "w")}
-                />
-                <line
-                  x1={x2}
-                  y1={y1}
-                  x2={x2}
-                  y2={y2}
-                  stroke="transparent"
-                  strokeWidth={2}
-                  style={{ cursor: "ew-resize" }}
-                  onPointerEnter={() => setResizeHintZone(selectedSkylightEntity.id, "rect-e")}
-                  onPointerLeave={() => clearResizeHintZone(selectedSkylightEntity.id, "rect-e")}
-                  onPointerDown={(event) => startSkylightResize(event, selectedSkylightEntity, "e")}
-                />
-
-                <circle cx={midX} cy={y1} r={0.16} fill="#ffffff" stroke="#4f6862" strokeWidth={0.05} pointerEvents="none" />
-                <circle cx={midX} cy={y2} r={0.16} fill="#ffffff" stroke="#4f6862" strokeWidth={0.05} pointerEvents="none" />
-                <circle cx={x1} cy={midY} r={0.16} fill="#ffffff" stroke="#4f6862" strokeWidth={0.05} pointerEvents="none" />
-                <circle cx={x2} cy={midY} r={0.16} fill="#ffffff" stroke="#4f6862" strokeWidth={0.05} pointerEvents="none" />
-
-                {anchors.map((anchor) => (
+                {edgeAnchors.map((anchor) => (
                   <g key={`sk-${anchor.handle}-${anchor.x}-${anchor.y}`}>
-                    <circle
-                      cx={anchor.x}
-                      cy={anchor.y}
-                      r={1}
+                    <rect
+                      x={anchor.x - anchor.width / 2 - RECT_RESIZE_HANDLE_HIT_SLOP}
+                      y={anchor.y - anchor.height / 2 - RECT_RESIZE_HANDLE_HIT_SLOP}
+                      width={anchor.width + RECT_RESIZE_HANDLE_HIT_SLOP * 2}
+                      height={anchor.height + RECT_RESIZE_HANDLE_HIT_SLOP * 2}
+                      rx={0.12}
                       fill="transparent"
                       style={{ cursor: anchor.cursor }}
                       onPointerEnter={() => setResizeHintZone(selectedSkylightEntity.id, `rect-${anchor.handle}` as ResizeHintZone)}
                       onPointerLeave={() => clearResizeHintZone(selectedSkylightEntity.id, `rect-${anchor.handle}` as ResizeHintZone)}
                       onPointerDown={(event) => startSkylightResize(event, selectedSkylightEntity, anchor.handle)}
                     />
+                    {showRectZoneHint(`rect-${anchor.handle}` as ResizeHintZone) && (
+                      <rect
+                        x={anchor.x - anchor.width / 2 - 0.12}
+                        y={anchor.y - anchor.height / 2 - 0.12}
+                        width={anchor.width + 0.24}
+                        height={anchor.height + 0.24}
+                        rx={0.12}
+                        fill="rgba(255, 229, 154, 0.26)"
+                        stroke="#ffe59a"
+                        strokeWidth={0.08}
+                        pointerEvents="none"
+                      />
+                    )}
+                    <rect
+                      x={anchor.x - anchor.width / 2}
+                      y={anchor.y - anchor.height / 2}
+                      width={anchor.width}
+                      height={anchor.height}
+                      rx={0.04}
+                      fill="#ffe59a"
+                      stroke="#ffe59a"
+                      strokeWidth={0.06}
+                      pointerEvents="none"
+                    />
+                  </g>
+                ))}
+
+                {cornerAnchors.map((anchor) => (
+                  <g key={`sk-${anchor.handle}-${anchor.x}-${anchor.y}`}>
                     <circle
                       cx={anchor.x}
                       cy={anchor.y}
-                      r={0.26}
-                      fill="#ffffff"
-                      stroke="#4f6862"
+                      r={RECT_RESIZE_CORNER_ANCHOR_RADIUS + RECT_RESIZE_HANDLE_HIT_SLOP}
+                      fill="transparent"
+                      style={{ cursor: anchor.cursor }}
+                      onPointerEnter={() => setResizeHintZone(selectedSkylightEntity.id, `rect-${anchor.handle}` as ResizeHintZone)}
+                      onPointerLeave={() => clearResizeHintZone(selectedSkylightEntity.id, `rect-${anchor.handle}` as ResizeHintZone)}
+                      onPointerDown={(event) => startSkylightResize(event, selectedSkylightEntity, anchor.handle)}
+                    />
+                    {showRectZoneHint(`rect-${anchor.handle}` as ResizeHintZone) && (
+                      <circle
+                        cx={anchor.x}
+                        cy={anchor.y}
+                        r={RECT_RESIZE_CORNER_ANCHOR_RADIUS + 0.12}
+                        fill="rgba(255, 229, 154, 0.26)"
+                        stroke="#ffe59a"
+                        strokeWidth={0.08}
+                        pointerEvents="none"
+                      />
+                    )}
+                    <circle
+                      cx={anchor.x}
+                      cy={anchor.y}
+                      r={RECT_RESIZE_CORNER_ANCHOR_RADIUS}
+                      fill="#ffe59a"
+                      stroke="#ffe59a"
                       strokeWidth={0.06}
                       pointerEvents="none"
                     />
