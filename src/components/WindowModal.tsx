@@ -7,10 +7,14 @@ export interface WindowModalSubmit {
 
 interface WindowModalProps {
   isOpen: boolean;
+  variant?: "modal" | "docked";
+  onCollapse?: () => void;
+  title?: string;
   initialWidthFt: number;
   initialHeightFt: number;
   onCancel: () => void;
   onSubmit: (payload: WindowModalSubmit) => void;
+  onLiveChange?: (payload: WindowModalSubmit) => void;
 }
 
 const WINDOW_PRESETS: Array<{ widthFt: number; heightFt: number }> = [
@@ -42,17 +46,29 @@ function clampToPositiveInt(value: number): number {
   return Math.max(1, Math.round(value));
 }
 
-export function WindowModal({ isOpen, initialWidthFt, initialHeightFt, onCancel, onSubmit }: WindowModalProps) {
+export function WindowModal({
+  isOpen,
+  variant = "modal",
+  onCollapse,
+  title = "WINDOW",
+  initialWidthFt,
+  initialHeightFt,
+  onCancel,
+  onSubmit,
+  onLiveChange,
+}: WindowModalProps) {
   const [widthFt, setWidthFt] = useState(3);
   const [heightFt, setHeightFt] = useState(4);
   const [widthDraft, setWidthDraft] = useState("3");
   const [heightDraft, setHeightDraft] = useState("4");
   const [selectedPreset, setSelectedPreset] = useState<string>(presetKey(3, 4));
+  const [isLiveChangeReady, setIsLiveChangeReady] = useState(false);
 
   useEffect(() => {
     if (!isOpen) {
       return;
     }
+    setIsLiveChangeReady(false);
     const nextWidth = clampToPositiveInt(initialWidthFt);
     const nextHeight = clampToPositiveInt(initialHeightFt);
     const nextPresetKey = findPresetKey(nextWidth, nextHeight);
@@ -63,6 +79,15 @@ export function WindowModal({ isOpen, initialWidthFt, initialHeightFt, onCancel,
     setSelectedPreset(nextPresetKey ?? CUSTOM_PRESET_KEY);
   }, [initialHeightFt, initialWidthFt, isOpen]);
 
+  useEffect(() => {
+    if (!isOpen) {
+      setIsLiveChangeReady(false);
+      return;
+    }
+    const frame = requestAnimationFrame(() => setIsLiveChangeReady(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [initialHeightFt, initialWidthFt, isOpen]);
+
   const canSubmit = useMemo(() => widthFt >= 1 && heightFt >= 1, [heightFt, widthFt]);
 
   const syncPresetFromValues = (nextWidth: number, nextHeight: number) => {
@@ -70,14 +95,40 @@ export function WindowModal({ isOpen, initialWidthFt, initialHeightFt, onCancel,
     setSelectedPreset(matched ?? CUSTOM_PRESET_KEY);
   };
 
+  useEffect(() => {
+    if (!isOpen || !onLiveChange || !canSubmit || !isLiveChangeReady) {
+      return;
+    }
+    onLiveChange({ widthFt, heightFt });
+  }, [canSubmit, heightFt, isLiveChangeReady, isOpen, widthFt]);
+
   if (!isOpen) {
     return null;
   }
 
+  const isDocked = variant === "docked";
+
   return (
-    <div className="modal-backdrop" onPointerDown={onCancel}>
-      <section className="text-modal" onPointerDown={(event) => event.stopPropagation()}>
-        <h2>WINDOW</h2>
+    <div
+      className={`modal-backdrop ${isDocked ? "modal-backdrop-docked" : ""}`}
+      onPointerDown={isDocked ? undefined : onCancel}
+    >
+      <section
+        className={`text-modal ${isDocked ? "modal-panel-docked" : ""}`}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        {isDocked && onCollapse && (
+          <button
+            type="button"
+            className="modal-panel-collapse-btn"
+            aria-label="Collapse edit panel"
+            title="Collapse"
+            onClick={onCollapse}
+          >
+            ▼
+          </button>
+        )}
+        <h2>{title}</h2>
 
         <div className="modal-row">
           <label>SIZE:</label>

@@ -9,9 +9,12 @@ export interface UtilityLabelInitialValues extends UtilityLabelSubmit {}
 
 interface UtilityLabelModalProps {
   isOpen: boolean;
+  variant?: "modal" | "docked";
+  onCollapse?: () => void;
   initialValues: UtilityLabelInitialValues;
   onCancel: () => void;
   onSubmit: (payload: UtilityLabelSubmit) => void;
+  onLiveChange?: (payload: UtilityLabelSubmit) => void;
 }
 
 const COLORS = ["WHITE", "BLUE", "RED", "YELLOW"] as const;
@@ -32,20 +35,34 @@ function colorSwatch(color: string): { fill: string; border: string } {
 
 export function UtilityLabelModal({
   isOpen,
+  variant = "modal",
+  onCollapse,
   initialValues,
   onCancel,
   onSubmit,
+  onLiveChange,
 }: UtilityLabelModalProps) {
   const [text, setText] = useState("");
   const [color, setColor] = useState("WHITE");
+  const [isLiveChangeReady, setIsLiveChangeReady] = useState(false);
   const textInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (!isOpen) {
       return;
     }
+    setIsLiveChangeReady(false);
     setText((initialValues.text ?? "").toUpperCase());
     setColor(initialValues.color.toUpperCase());
+  }, [initialValues, isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setIsLiveChangeReady(false);
+      return;
+    }
+    const frame = requestAnimationFrame(() => setIsLiveChangeReady(true));
+    return () => window.cancelAnimationFrame(frame);
   }, [initialValues, isOpen]);
 
   useEffect(() => {
@@ -60,13 +77,39 @@ export function UtilityLabelModal({
 
   const canSubmit = useMemo(() => text.trim().length > 0, [text]);
 
+  useEffect(() => {
+    if (!isOpen || !onLiveChange || !canSubmit || !isLiveChangeReady) {
+      return;
+    }
+    onLiveChange({ text: text.trim().toUpperCase(), color });
+  }, [canSubmit, color, isLiveChangeReady, isOpen, text]);
+
   if (!isOpen) {
     return null;
   }
 
+  const isDocked = variant === "docked";
+
   return (
-    <div className="modal-backdrop" onPointerDown={onCancel}>
-      <section className="text-modal" onPointerDown={(event) => event.stopPropagation()}>
+    <div
+      className={`modal-backdrop ${isDocked ? "modal-backdrop-docked" : ""}`}
+      onPointerDown={isDocked ? undefined : onCancel}
+    >
+      <section
+        className={`text-modal ${isDocked ? "modal-panel-docked" : ""}`}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        {isDocked && onCollapse && (
+          <button
+            type="button"
+            className="modal-panel-collapse-btn"
+            aria-label="Collapse edit panel"
+            title="Collapse"
+            onClick={onCollapse}
+          >
+            ▼
+          </button>
+        )}
         <h2>UTILITY LABEL</h2>
 
         <div className="modal-row">

@@ -30,7 +30,7 @@ import { createEntityFromTool, createWallPoint, createWallSegment } from "../sta
 import { getToolDefinition } from "../tools/toolDefinitions";
 import { getUtilityIconByEntityType, isUtilityEntityType, isUtilityToolId } from "../assets/utilityIcons";
 import { inferFloorPresetFromName, isAtticPreset, isBasementPreset, sortFloorsByPresetOrder } from "../constants/floors";
-import type { MapEntity, Orientation, Point, ToolId, WallPoint, WallSegment } from "../types";
+import type { MapEntity, Orientation, Point, Project, ToolId, WallPoint, WallSegment } from "../types";
 import {
   clamp,
   constrainOrthogonal,
@@ -1387,6 +1387,7 @@ interface TextModalState {
 
 interface WindowModalState {
   entityId: string;
+  title: string;
   initialWidthFt: number;
   initialHeightFt: number;
 }
@@ -1409,6 +1410,14 @@ interface UtilityLabelModalState {
   entityId: string;
   initialText: string;
   initialColor: string;
+}
+
+interface SelectionEditSessionState {
+  entityId: string;
+  floorId: string;
+  projectSnapshot: Project;
+  historyPastLength: number;
+  historyFutureSnapshot: Project[];
 }
 
 interface BumpOutModalState {
@@ -3964,6 +3973,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
   const [windowModalState, setWindowModalState] = useState<WindowModalState | null>(null);
   const [utilityLabelModalState, setUtilityLabelModalState] = useState<UtilityLabelModalState | null>(null);
   const [bumpOutModalState, setBumpOutModalState] = useState<BumpOutModalState | null>(null);
+  const [collapsedSelectionPanelEntityId, setCollapsedSelectionPanelEntityId] = useState<string | null>(null);
   const [bumpOutConfig, setBumpOutConfig] = useState<{ flats: BumpOutFlats; longEdgeFt: number }>({
     flats: defaultBumpOutFlats,
     longEdgeFt: defaultBumpOutLongEdgeFt,
@@ -4000,6 +4010,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
     startScreen: { x: 0, y: 0 },
     startWorld: { x: 0, y: 0 },
   });
+  const selectionEditSessionRef = useRef<SelectionEditSessionState | null>(null);
 
   const clearTouchGestureState = () => {
     touchPointsRef.current.clear();
@@ -4231,6 +4242,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
       (candidate.type === "rectangle" ||
         candidate.type === "text" ||
         candidate.type === "window" ||
+        candidate.type === "skylight" ||
         candidate.type === "door" ||
         isUtilityEntityType(candidate.type));
     if (!editable || !candidate) {
@@ -4575,11 +4587,12 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
   };
 
   const openWindowSizeModal = (entity: MapEntity) => {
-    if (entity.type !== "window") {
+    if (entity.type !== "window" && entity.type !== "skylight") {
       return;
     }
     setWindowModalState({
       entityId: entity.id,
+      title: entity.type === "skylight" ? "SKYLIGHT" : "WINDOW",
       initialWidthFt: Math.max(1, Math.round(Math.abs(entity.width))),
       initialHeightFt: Math.max(1, Math.round(Math.abs(entity.height))),
     });
@@ -4625,7 +4638,88 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
     });
   };
 
+  const closeSelectionPanels = () => {
+    setRectangleModalState((current) => (current?.mode === "edit" ? null : current));
+    setTextModalState((current) => (current?.mode === "edit" ? null : current));
+    setDoorModalState(null);
+    setSlidingDoorModalState(null);
+    setWindowModalState(null);
+    setUtilityLabelModalState(null);
+  };
+
+  const collapseSelectionPanel = () => {
+    const targetId =
+      selectedEditableEntity?.id ??
+      activeSelectionPanelEntityId;
+    if (!targetId) {
+      return;
+    }
+    setCollapsedSelectionPanelEntityId(targetId);
+    closeSelectionPanels();
+  };
+
+  const beginSelectionEditSession = (entity: MapEntity) => {
+    selectionEditSessionRef.current = {
+      entityId: entity.id,
+      floorId: floor.id,
+      projectSnapshot: state.project,
+      historyPastLength: state.historyPast.length,
+      historyFutureSnapshot: [...state.historyFuture],
+    };
+  };
+
+  const clearSelectionEditSession = () => {
+    selectionEditSessionRef.current = null;
+  };
+
+  const hasActiveSelectionEditSessionFor = (entityId: string): boolean => {
+    const session = selectionEditSessionRef.current;
+    return Boolean(session && session.entityId === entityId && session.floorId === floor.id);
+  };
+
+  const commitSelectionFocusMode = () => {
+    const session = selectionEditSessionRef.current;
+    if (session && session.floorId === floor.id) {
+      dispatch({
+        type: "COMMIT_ACTIVE_FLOOR_ENTITY_EDITS",
+        projectSnapshot: session.projectSnapshot,
+        historyPastLength: session.historyPastLength,
+      });
+    }
+
+    clearSelectionEditSession();
+    setCollapsedSelectionPanelEntityId(null);
+    dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
+    closeSelectionPanels();
+  };
+
+  const cancelSelectionFocusMode = () => {
+    const session = selectionEditSessionRef.current;
+    clearSelectionEditSession();
+    setCollapsedSelectionPanelEntityId(null);
+    dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
+    closeSelectionPanels();
+
+    if (session && session.floorId === floor.id) {
+      dispatch({
+        type: "CANCEL_ACTIVE_FLOOR_ENTITY_EDITS",
+        projectSnapshot: session.projectSnapshot,
+        historyPastLength: session.historyPastLength,
+        historyFuture: session.historyFutureSnapshot,
+      });
+    }
+  };
+
   const openEntityEditModal = (entity: MapEntity) => {
+    const activeSession = selectionEditSessionRef.current;
+    if (!activeSession || activeSession.entityId !== entity.id || activeSession.floorId !== floor.id) {
+      beginSelectionEditSession(entity);
+    }
+
+    setCollapsedSelectionPanelEntityId(null);
+
+    closeSelectionPanels();
+
     if (entity.type === "rectangle") {
       openEditRectangleModal(entity);
       return;
@@ -4638,6 +4732,10 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
       openWindowSizeModal(entity);
       return;
     }
+    if (entity.type === "skylight") {
+      openWindowSizeModal(entity);
+      return;
+    }
     if (entity.type === "door") {
       openDoorModal(entity);
       return;
@@ -4645,6 +4743,183 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
     if (isUtilityEntityType(entity.type)) {
       openUtilityLabelModal(entity);
     }
+  };
+
+  const activeSelectionPanelEntityId = (() => {
+    if (rectangleModalState?.mode === "edit" && rectangleModalState.entityId) {
+      return rectangleModalState.entityId;
+    }
+    if (textModalState?.mode === "edit" && textModalState.entityId) {
+      return textModalState.entityId;
+    }
+    if (doorModalState?.entityId) {
+      return doorModalState.entityId;
+    }
+    if (slidingDoorModalState?.entityId) {
+      return slidingDoorModalState.entityId;
+    }
+    if (windowModalState?.entityId) {
+      return windowModalState.entityId;
+    }
+    if (utilityLabelModalState?.entityId) {
+      return utilityLabelModalState.entityId;
+    }
+    return null;
+  })();
+
+  const activeBumpOutHostEdge = useMemo<RectEdge | null>(() => {
+    if (rectangleModalState?.mode !== "edit" || !rectangleModalState.entityId) {
+      return null;
+    }
+    const candidate = floor.entities.find((entity) => entity.id === rectangleModalState.entityId);
+    if (!candidate || !isBumpOutRectangle(candidate)) {
+      return null;
+    }
+    return (candidate.metadata.hostEdge as RectEdge | undefined) ?? "top";
+  }, [floor.entities, rectangleModalState]);
+
+  const hasCreateStyleModalOpen =
+    rectangleModalState?.mode === "create" ||
+    textModalState?.mode === "create" ||
+    bumpOutModalState !== null;
+
+  useEffect(() => {
+    if (hasCreateStyleModalOpen) {
+      return;
+    }
+
+    if (!selectedEditableEntity) {
+      const session = selectionEditSessionRef.current;
+      if (session && session.floorId === floor.id) {
+        dispatch({
+          type: "COMMIT_ACTIVE_FLOOR_ENTITY_EDITS",
+          projectSnapshot: session.projectSnapshot,
+          historyPastLength: session.historyPastLength,
+        });
+      }
+      clearSelectionEditSession();
+      setCollapsedSelectionPanelEntityId(null);
+      if (activeSelectionPanelEntityId !== null) {
+        closeSelectionPanels();
+      }
+      return;
+    }
+
+    if (collapsedSelectionPanelEntityId === selectedEditableEntity.id) {
+      return;
+    }
+
+    if (activeSelectionPanelEntityId === selectedEditableEntity.id) {
+      return;
+    }
+
+    openEntityEditModal(selectedEditableEntity);
+  }, [
+    activeSelectionPanelEntityId,
+    bumpOutModalState,
+    collapsedSelectionPanelEntityId,
+    dispatch,
+    floor.id,
+    hasCreateStyleModalOpen,
+    selectedEditableEntity,
+  ]);
+
+  const resolveBumpOutRectFromModal = (
+    existing: MapEntity,
+    nextWidthFt: number,
+    nextHeightFt: number,
+  ): RectBounds => {
+    const sourceRect = rectBoundsFromEntity(existing);
+    const hostRectId = existing.metadata.hostRectId as string | undefined;
+    const hostEdge = (existing.metadata.hostEdge as RectEdge | undefined) ?? "top";
+    const hostEntity =
+      hostRectId
+        ? floor.entities.find(
+            (entity) =>
+              entity.id === hostRectId &&
+              entity.type === "rectangle" &&
+              !isBumpOutRectangle(entity),
+          )
+        : null;
+
+    if (!hostEntity) {
+      return {
+        x: sourceRect.x,
+        y: sourceRect.y,
+        width: Math.max(1, Math.round(nextWidthFt)),
+        height: Math.max(1, Math.round(nextHeightFt)),
+      };
+    }
+
+    const hostRect = rectBoundsFromEntity(hostEntity);
+    const flats = getBumpOutFlats(existing);
+    const limits = getBumpOutStyleSizeLimits(flats);
+    const horizontalHost = hostEdge === "top" || hostEdge === "bottom";
+
+    if (horizontalHost) {
+      const minLong = Math.max(1, Math.min(limits.minLong, Math.round(hostRect.width)));
+      const long = clampValue(Math.max(1, Math.round(nextWidthFt)), minLong, Math.round(hostRect.width));
+      const depth = Math.max(limits.minDepth, Math.round(nextHeightFt));
+      const currentCenterX = sourceRect.x + sourceRect.width / 2;
+      const x = Math.round(clampValue(currentCenterX - long / 2, hostRect.x, hostRect.x + hostRect.width - long));
+      const y = hostEdge === "top" ? Math.round(hostRect.y - depth) : Math.round(hostRect.y + hostRect.height);
+      return {
+        x,
+        y,
+        width: long,
+        height: depth,
+      };
+    }
+
+    const minLong = Math.max(1, Math.min(limits.minLong, Math.round(hostRect.height)));
+    const long = clampValue(Math.max(1, Math.round(nextHeightFt)), minLong, Math.round(hostRect.height));
+    const depth = Math.max(limits.minDepth, Math.round(nextWidthFt));
+    const currentCenterY = sourceRect.y + sourceRect.height / 2;
+    const y = Math.round(clampValue(currentCenterY - long / 2, hostRect.y, hostRect.y + hostRect.height - long));
+    const x = hostEdge === "left" ? Math.round(hostRect.x - depth) : Math.round(hostRect.x + hostRect.width);
+    return {
+      x,
+      y,
+      width: depth,
+      height: long,
+    };
+  };
+
+  const bumpOutModalHandle = (hostEdge: RectEdge, longChanged: boolean, depthChanged: boolean): ResizeHandle => {
+    if (hostEdge === "top") {
+      if (longChanged && depthChanged) {
+        return "ne";
+      }
+      if (depthChanged) {
+        return "n";
+      }
+      return "e";
+    }
+    if (hostEdge === "bottom") {
+      if (longChanged && depthChanged) {
+        return "se";
+      }
+      if (depthChanged) {
+        return "s";
+      }
+      return "e";
+    }
+    if (hostEdge === "left") {
+      if (longChanged && depthChanged) {
+        return "sw";
+      }
+      if (depthChanged) {
+        return "w";
+      }
+      return "s";
+    }
+    if (longChanged && depthChanged) {
+      return "se";
+    }
+    if (depthChanged) {
+      return "e";
+    }
+    return "s";
   };
 
   const tryPlaceDoorOrWindow = (
@@ -4803,7 +5078,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
   };
 
   const beginPan = (
-    event: ReactPointerEvent<SVGSVGElement>,
+    event: ReactPointerEvent<SVGElement>,
     options?: { tapAction?: InteractionState["tapAction"] },
   ) => {
     interactionRef.current = {
@@ -4820,6 +5095,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
 
   const handleBackgroundDown = (event: ReactPointerEvent<SVGSVGElement>) => {
     setOpeningPlacementPreview(null);
+    setHoveredSmartGuideEntityId(null);
 
     if (event.pointerType === "touch" || event.pointerType === "pen") {
       event.preventDefault();
@@ -6206,6 +6482,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
 
   const handleEntityDown = (event: ReactPointerEvent<SVGGElement>, entity: MapEntity) => {
     setOpeningPlacementPreview(null);
+    setHoveredSmartGuideEntityId(null);
 
     event.stopPropagation();
     if (event.pointerType === "touch" || event.pointerType === "pen") {
@@ -6942,17 +7219,20 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
     if (selection.kind !== "entity") {
       return null;
     }
-    return displayEntities.find((entity) => entity.id === selection.id) ?? null;
+    return floor.entities.find((entity) => entity.id === selection.id) ?? null;
   })();
 
   const smartGuideEntityForTopHighlight = (() => {
+    if (state.activeTool === "select") {
+      return null;
+    }
     if (!hoveredSmartGuideEntityId) {
       return null;
     }
     if (interactionRef.current.type !== "none") {
       return null;
     }
-    const hovered = displayEntities.find((entity) => entity.id === hoveredSmartGuideEntityId);
+    const hovered = floor.entities.find((entity) => entity.id === hoveredSmartGuideEntityId);
     if (!hovered) {
       return null;
     }
@@ -7180,7 +7460,9 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
   const showCustomCursorOverlay =
     (showResizeCursorOverlay && resizeCursorScreen) ||
     (showMoveCursorOverlay && moveCursorScreen);
-  const showSelectedEditIcon = Boolean(selectedEditableEntity);
+  const showCollapsedEditIcon =
+    Boolean(selectedEditableEntity) &&
+    collapsedSelectionPanelEntityId === selectedEditableEntity?.id;
   const selectedBumpOutAngleBias = selectedBumpOutEntity ? getBumpOutAngleBias(selectedBumpOutEntity) : 0;
   const handleEntitySmartGuidePointerEnter = (event: ReactPointerEvent<SVGElement>, entity: MapEntity) => {
     const hoverCapableInput = event.pointerType === "mouse" || event.pointerType === "pen";
@@ -8897,7 +9179,19 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
                 if (event.pointerType === "touch" || event.pointerType === "pen") {
                   event.preventDefault();
                 }
-                dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
+
+                if (registerTouchPointer(event)) {
+                  return;
+                }
+
+                if (event.button === 1 || event.button === 2 || event.altKey) {
+                  event.preventDefault();
+                  beginPan(event);
+                  return;
+                }
+
+                // Tap to deselect, drag to pan while keeping selection active.
+                beginPan(event, { tapAction: "deselect-empty" });
               }}
             />
           )}
@@ -9562,12 +9856,12 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
 
       </svg>
 
-      {showSelectedEditIcon && selectedEditableEntity && (
+      {showCollapsedEditIcon && selectedEditableEntity && (
         <button
           type="button"
-          className="workspace-edit-btn"
-          aria-label="Edit selected object"
-          title="Edit"
+          className="workspace-edit-btn workspace-collapsed-edit-btn"
+          aria-label="Open selected object editor"
+          title="Edit selected object"
           onPointerDown={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -9771,11 +10065,120 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
 
       <RectangleModal
         isOpen={rectangleModalState !== null}
+        variant={rectangleModalState?.mode === "edit" ? "docked" : "modal"}
+        onCollapse={rectangleModalState?.mode === "edit" ? collapseSelectionPanel : undefined}
+        bumpOutHostEdge={activeBumpOutHostEdge}
         isAtticFloor={isActiveFloorAttic}
         floorPreset={activeFloorPreset}
         floorUnconditioned={Boolean(floor.unconditioned)}
         initialValues={rectangleModalState?.initialValues ?? DEFAULT_RECTANGLE_MODAL_VALUES}
-        onCancel={() => setRectangleModalState(null)}
+        onCancel={() => {
+          if (rectangleModalState?.mode === "edit") {
+            cancelSelectionFocusMode();
+            return;
+          }
+          setRectangleModalState(null);
+        }}
+        onLiveChange={(payload: RectangleModalSubmit) => {
+          if (!rectangleModalState || rectangleModalState.mode !== "edit" || !rectangleModalState.entityId) {
+            return;
+          }
+          if (!hasActiveSelectionEditSessionFor(rectangleModalState.entityId)) {
+            return;
+          }
+
+          const existing = floor.entities.find((entity) => entity.id === rectangleModalState.entityId);
+          if (!existing || existing.type !== "rectangle") {
+            return;
+          }
+
+          const metadata = {
+            color: payload.color,
+            unconditioned: payload.unconditioned,
+            ceilingType: isActiveFloorAttic ? "standard" : payload.ceilingType,
+            standardHeightFt: isActiveFloorAttic ? 8 : payload.standardHeightFt,
+            lowHeightFt: isActiveFloorAttic ? 8 : payload.lowHeightFt,
+            highHeightFt: isActiveFloorAttic ? 12 : payload.highHeightFt,
+          };
+
+          const isBumpOut = isBumpOutRectangle(existing);
+          const sourceRect = rectBoundsFromEntity(existing);
+          const nextBaseRect = isBumpOut
+            ? resolveBumpOutRectFromModal(
+                existing,
+                Math.max(1, Math.round(payload.widthFt)),
+                Math.max(1, Math.round(payload.heightFt)),
+              )
+            : {
+                x: existing.x,
+                y: existing.y,
+                width: Math.max(1, Math.round(payload.widthFt)),
+                height: Math.max(1, Math.round(payload.heightFt)),
+              };
+
+          let bumpOutMetadata = existing.metadata;
+          if (isBumpOut) {
+            const hostEdge = (existing.metadata.hostEdge as RectEdge | undefined) ?? "top";
+            const horizontalHost = hostEdge === "top" || hostEdge === "bottom";
+            const sourceLong = horizontalHost ? sourceRect.width : sourceRect.height;
+            const nextLong = horizontalHost ? nextBaseRect.width : nextBaseRect.height;
+            const sourceDepth = horizontalHost ? sourceRect.height : sourceRect.width;
+            const nextDepth = horizontalHost ? nextBaseRect.height : nextBaseRect.width;
+            const syntheticHandle = bumpOutModalHandle(
+              hostEdge,
+              nextLong !== sourceLong,
+              nextDepth !== sourceDepth,
+            );
+            bumpOutMetadata = updateBumpOutMetadataOnResize(
+              existing,
+              sourceRect,
+              nextBaseRect,
+              syntheticHandle,
+            );
+          }
+
+          const updated: MapEntity = {
+            ...existing,
+            label: payload.label.trim().toUpperCase(),
+            x: nextBaseRect.x,
+            y: nextBaseRect.y,
+            width: nextBaseRect.width,
+            height: nextBaseRect.height,
+            metadata: {
+              ...bumpOutMetadata,
+              ...metadata,
+            },
+          };
+          dispatch({ type: "UPSERT_ENTITY", entity: updated });
+
+          if (isBumpOutRectangle(updated)) {
+            const nextRectangles = rectangleEntities.map((entity) =>
+              entity.id === updated.id ? updated : entity,
+            );
+            const hostedWindows = floor.entities.filter(
+              (entity) =>
+                entity.type === "window" &&
+                entity.metadata.hostRectId === updated.id &&
+                Number.isFinite(Number(entity.metadata.bumpOutSegmentIndex)),
+            );
+
+            for (const hostedWindow of hostedWindows) {
+              const synced = syncWindowToBumpOutSegment(hostedWindow, nextRectangles);
+              if (!synced) {
+                dispatch({ type: "REMOVE_ENTITY", entityId: hostedWindow.id });
+                continue;
+              }
+              if (
+                synced.x !== hostedWindow.x ||
+                synced.y !== hostedWindow.y ||
+                synced.rotation !== hostedWindow.rotation ||
+                synced.width !== hostedWindow.width
+              ) {
+                dispatch({ type: "UPSERT_ENTITY", entity: synced });
+              }
+            }
+          }
+        }}
         onSubmit={(payload: RectangleModalSubmit) => {
           if (!rectangleModalState) {
             return;
@@ -9791,54 +10194,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
           };
 
           if (rectangleModalState.mode === "edit" && rectangleModalState.entityId) {
-            const existing = floor.entities.find((entity) => entity.id === rectangleModalState.entityId);
-            if (!existing || existing.type !== "rectangle") {
-              setRectangleModalState(null);
-              return;
-            }
-
-            const updated: MapEntity = {
-              ...existing,
-              label: payload.label.trim().toUpperCase(),
-              width: Math.max(1, Math.round(payload.widthFt)),
-              height: Math.max(1, Math.round(payload.heightFt)),
-              metadata: {
-                ...existing.metadata,
-                ...metadata,
-              },
-            };
-            dispatch({ type: "UPSERT_ENTITY", entity: updated });
-
-            if (isBumpOutRectangle(updated)) {
-              const nextRectangles = rectangleEntities.map((entity) =>
-                entity.id === updated.id ? updated : entity,
-              );
-              const hostedWindows = floor.entities.filter(
-                (entity) =>
-                  entity.type === "window" &&
-                  entity.metadata.hostRectId === updated.id &&
-                  Number.isFinite(Number(entity.metadata.bumpOutSegmentIndex)),
-              );
-
-              for (const hostedWindow of hostedWindows) {
-                const synced = syncWindowToBumpOutSegment(hostedWindow, nextRectangles);
-                if (!synced) {
-                  dispatch({ type: "REMOVE_ENTITY", entityId: hostedWindow.id });
-                  continue;
-                }
-                if (
-                  synced.x !== hostedWindow.x ||
-                  synced.y !== hostedWindow.y ||
-                  synced.rotation !== hostedWindow.rotation ||
-                  synced.width !== hostedWindow.width
-                ) {
-                  dispatch({ type: "UPSERT_ENTITY", entity: synced });
-                }
-              }
-            }
-
-            dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: updated.id } });
-            setRectangleModalState(null);
+            commitSelectionFocusMode();
             return;
           }
 
@@ -9874,10 +10230,42 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
 
       <TextModal
         isOpen={textModalState !== null}
+        variant={textModalState?.mode === "edit" ? "docked" : "modal"}
+        onCollapse={textModalState?.mode === "edit" ? collapseSelectionPanel : undefined}
         mode={textModalState?.mode ?? "create"}
         initialValues={textModalState?.initialValues ?? DEFAULT_TEXT_MODAL_VALUES}
+        onLiveChange={(payload: TextModalSubmit) => {
+          if (!textModalState || textModalState.mode !== "edit" || !textModalState.entityId) {
+            return;
+          }
+          if (!hasActiveSelectionEditSessionFor(textModalState.entityId)) {
+            return;
+          }
+
+          const existing = floor.entities.find((entity) => entity.id === textModalState.entityId);
+          if (!existing || existing.type !== "text") {
+            return;
+          }
+
+          const updated: MapEntity = {
+            ...existing,
+            label: payload.text.toUpperCase(),
+            metadata: {
+              ...existing.metadata,
+              color: payload.color,
+              textSize: payload.size,
+            },
+          };
+
+          dispatch({ type: "UPSERT_ENTITY", entity: updated });
+        }}
         onCancel={() => {
           const wasCreate = textModalState?.mode === "create";
+          const wasEdit = textModalState?.mode === "edit";
+          if (wasEdit) {
+            cancelSelectionFocusMode();
+            return;
+          }
           setTextModalState(null);
           if (wasCreate) {
             maybeAutoReturnToSelect("text");
@@ -9889,25 +10277,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
           }
 
           if (textModalState.mode === "edit" && textModalState.entityId) {
-            const existing = floor.entities.find((entity) => entity.id === textModalState.entityId);
-            if (!existing || existing.type !== "text") {
-              setTextModalState(null);
-              return;
-            }
-
-            const updated: MapEntity = {
-              ...existing,
-              label: payload.text.toUpperCase(),
-              metadata: {
-                ...existing.metadata,
-                color: payload.color,
-                textSize: payload.size,
-              },
-            };
-
-            dispatch({ type: "UPSERT_ENTITY", entity: updated });
-            dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: updated.id } });
-            setTextModalState(null);
+            commitSelectionFocusMode();
             return;
           }
 
@@ -9928,13 +10298,18 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
 
       <DoorModal
         isOpen={doorModalState !== null}
+        variant="docked"
+        onCollapse={collapseSelectionPanel}
         title={doorModalState?.kind === "double" ? "DOUBLE DOOR" : "DOOR"}
         initialWidthFt={doorModalState?.initialWidthFt ?? SINGLE_DOOR_DEFAULT_WIDTH}
         initialHeightFt={doorModalState?.initialHeightFt ?? 7}
         initialMirrored={doorModalState?.initialMirrored ?? false}
-        onCancel={() => setDoorModalState(null)}
-        onSubmit={(payload: DoorModalSubmit) => {
+        onCancel={cancelSelectionFocusMode}
+        onLiveChange={(payload: DoorModalSubmit) => {
           if (!doorModalState) {
+            return;
+          }
+          if (!hasActiveSelectionEditSessionFor(doorModalState.entityId)) {
             return;
           }
 
@@ -9970,18 +10345,24 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
           updated.y = resolvedPosition.y;
 
           dispatch({ type: "UPSERT_ENTITY", entity: updated });
-          dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: updated.id } });
-          setDoorModalState(null);
+        }}
+        onSubmit={() => {
+          commitSelectionFocusMode();
         }}
       />
 
       <SlidingGlassDoorModal
         isOpen={slidingDoorModalState !== null}
+        variant="docked"
+        onCollapse={collapseSelectionPanel}
         initialWidthFt={slidingDoorModalState?.initialWidthFt ?? SLIDING_DOOR_DEFAULT_WIDTH}
         initialHeightFt={slidingDoorModalState?.initialHeightFt ?? SLIDING_DOOR_DEFAULT_HEIGHT}
-        onCancel={() => setSlidingDoorModalState(null)}
-        onSubmit={(payload: SlidingGlassDoorModalSubmit) => {
+        onCancel={cancelSelectionFocusMode}
+        onLiveChange={(payload: SlidingGlassDoorModalSubmit) => {
           if (!slidingDoorModalState) {
+            return;
+          }
+          if (!hasActiveSelectionEditSessionFor(slidingDoorModalState.entityId)) {
             return;
           }
 
@@ -10013,24 +10394,42 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
           updated.y = resolvedPosition.y;
 
           dispatch({ type: "UPSERT_ENTITY", entity: updated });
-          dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: updated.id } });
-          setSlidingDoorModalState(null);
+        }}
+        onSubmit={() => {
+          commitSelectionFocusMode();
         }}
       />
 
       <WindowModal
         isOpen={windowModalState !== null}
+        variant="docked"
+        onCollapse={collapseSelectionPanel}
+        title={windowModalState?.title ?? "WINDOW"}
         initialWidthFt={windowModalState?.initialWidthFt ?? 3}
         initialHeightFt={windowModalState?.initialHeightFt ?? 4}
-        onCancel={() => setWindowModalState(null)}
-        onSubmit={(payload: WindowModalSubmit) => {
+        onCancel={cancelSelectionFocusMode}
+        onLiveChange={(payload: WindowModalSubmit) => {
           if (!windowModalState) {
+            return;
+          }
+          if (!hasActiveSelectionEditSessionFor(windowModalState.entityId)) {
             return;
           }
 
           const existing = floor.entities.find((entity) => entity.id === windowModalState.entityId);
-          if (!existing || existing.type !== "window") {
-            setWindowModalState(null);
+          if (!existing || (existing.type !== "window" && existing.type !== "skylight")) {
+            return;
+          }
+
+          if (existing.type === "skylight") {
+            dispatch({
+              type: "UPSERT_ENTITY",
+              entity: {
+                ...existing,
+                width: Math.max(1, Math.round(payload.widthFt)),
+                height: Math.max(1, Math.round(payload.heightFt)),
+              },
+            });
             return;
           }
 
@@ -10056,26 +10455,31 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
           updated.y = resolvedPosition.y;
 
           dispatch({ type: "UPSERT_ENTITY", entity: updated });
-          dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: updated.id } });
-          setWindowModalState(null);
+        }}
+        onSubmit={() => {
+          commitSelectionFocusMode();
         }}
       />
 
       <UtilityLabelModal
         isOpen={utilityLabelModalState !== null}
+        variant="docked"
+        onCollapse={collapseSelectionPanel}
         initialValues={{
           text: utilityLabelModalState?.initialText ?? "",
           color: utilityLabelModalState?.initialColor ?? "WHITE",
         }}
-        onCancel={() => setUtilityLabelModalState(null)}
-        onSubmit={(payload: UtilityLabelSubmit) => {
+        onCancel={cancelSelectionFocusMode}
+        onLiveChange={(payload: UtilityLabelSubmit) => {
           if (!utilityLabelModalState) {
+            return;
+          }
+          if (!hasActiveSelectionEditSessionFor(utilityLabelModalState.entityId)) {
             return;
           }
 
           const existing = floor.entities.find((entity) => entity.id === utilityLabelModalState.entityId);
           if (!existing || !isUtilityEntityType(existing.type)) {
-            setUtilityLabelModalState(null);
             return;
           }
 
@@ -10088,8 +10492,9 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
             },
           };
           dispatch({ type: "UPSERT_ENTITY", entity: updated });
-          dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: updated.id } });
-          setUtilityLabelModalState(null);
+        }}
+        onSubmit={() => {
+          commitSelectionFocusMode();
         }}
       />
 

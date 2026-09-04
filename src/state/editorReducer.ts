@@ -909,6 +909,26 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
       }));
       return withHistory(state, nextProject);
     }
+    case "CANCEL_ACTIVE_FLOOR_ENTITY_EDITS": {
+      const safePastLength = clamp(action.historyPastLength, 0, state.historyPast.length);
+      return {
+        ...state,
+        project: action.projectSnapshot,
+        historyPast: state.historyPast.slice(0, safePastLength),
+        historyFuture: action.historyFuture,
+      };
+    }
+    case "COMMIT_ACTIVE_FLOOR_ENTITY_EDITS": {
+      const safePastLength = clamp(action.historyPastLength, 0, state.historyPast.length);
+      if (state.project === action.projectSnapshot) {
+        return state;
+      }
+      return {
+        ...state,
+        historyPast: [...state.historyPast.slice(0, safePastLength), action.projectSnapshot],
+        historyFuture: [],
+      };
+    }
     case "REMOVE_ENTITY": {
       const nextProject = updateActiveFloor(state.project, (floor) => ({
         ...floor,
