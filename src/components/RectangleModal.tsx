@@ -19,12 +19,16 @@ export interface RectangleModalInitialValues extends RectangleModalSubmit {}
 
 interface RectangleModalProps {
   isOpen: boolean;
+  variant?: "modal" | "docked";
+  onCollapse?: () => void;
+  bumpOutHostEdge?: "top" | "bottom" | "left" | "right" | null;
   isAtticFloor?: boolean;
   floorPreset?: FloorPreset;
   floorUnconditioned?: boolean;
   initialValues: RectangleModalInitialValues;
   onCancel: () => void;
   onSubmit: (payload: RectangleModalSubmit) => void;
+  onLiveChange?: (payload: RectangleModalSubmit) => void;
 }
 
 const COLORS = ["BLUE", "GREEN", "RED", "YELLOW"] as const;
@@ -175,12 +179,16 @@ function StepperField({
 
 export function RectangleModal({
   isOpen,
+  variant = "modal",
+  onCollapse,
+  bumpOutHostEdge = null,
   isAtticFloor = false,
   floorPreset,
   floorUnconditioned = false,
   initialValues,
   onCancel,
   onSubmit,
+  onLiveChange,
 }: RectangleModalProps) {
   const isBasementFloor = floorPreset === "BASEMENT_CRAWLSPACE";
   const labelOptions = isAtticFloor
@@ -189,6 +197,9 @@ export function RectangleModal({
       ? BASEMENT_LABEL_OPTIONS
       : STANDARD_LABEL_OPTIONS;
   const supportsCustomLabel = labelOptions.some((option) => option === "Custom");
+  const isVerticalBumpOutHost = bumpOutHostEdge === "left" || bumpOutHostEdge === "right";
+  const widthLabel = bumpOutHostEdge ? (isVerticalBumpOutHost ? "DEPTH:" : "SPAN:") : "WIDTH:";
+  const heightLabel = bumpOutHostEdge ? (isVerticalBumpOutHost ? "SPAN:" : "DEPTH:") : "HEIGHT:";
 
   const [labelOption, setLabelOption] = useState<RectangleLabelOption>("");
   const [customLabel, setCustomLabel] = useState("");
@@ -201,6 +212,7 @@ export function RectangleModal({
   const [lowHeightFt, setLowHeightFt] = useState(8);
   const [highHeightFt, setHighHeightFt] = useState(12);
   const [colorManuallySet, setColorManuallySet] = useState(false);
+  const [isLiveChangeReady, setIsLiveChangeReady] = useState(false);
   const customLabelInputRef = useRef<HTMLInputElement | null>(null);
   const isBasementCrawlspace = isBasementFloor && labelOption === "Crawlspace";
   const isBasementSlab = isBasementFloor && labelOption === "Slab";
@@ -212,6 +224,7 @@ export function RectangleModal({
     if (!isOpen) {
       return;
     }
+    setIsLiveChangeReady(false);
     const resolvedLabel = resolveLabelSelection(initialValues.label ?? "", labelOptions);
     setLabelOption(resolvedLabel.option);
     setCustomLabel(resolvedLabel.customLabel);
@@ -231,6 +244,15 @@ export function RectangleModal({
       setLowHeightFt(8);
       setHighHeightFt(12);
     }
+  }, [initialValues, isAtticFloor, isOpen, labelOptions]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      setIsLiveChangeReady(false);
+      return;
+    }
+    const frame = requestAnimationFrame(() => setIsLiveChangeReady(true));
+    return () => window.cancelAnimationFrame(frame);
   }, [initialValues, isAtticFloor, isOpen, labelOptions]);
 
   useEffect(() => {
@@ -272,13 +294,66 @@ export function RectangleModal({
     return { first: "HIGH:", second: "LOW:" };
   }, [ceilingType]);
 
+  useEffect(() => {
+    if (!isOpen || !onLiveChange || !canSubmit || !isLiveChangeReady) {
+      return;
+    }
+
+    onLiveChange({
+      label: supportsCustomLabel && labelOption === "Custom" ? customLabel.trim() : labelOption,
+      color,
+      widthFt,
+      heightFt,
+      unconditioned: effectiveUnconditioned,
+      ceilingType: isAtticFloor ? "standard" : effectiveCeilingType,
+      standardHeightFt: isAtticFloor ? 8 : standardHeightFt,
+      highHeightFt: isAtticFloor ? 12 : highHeightFt,
+      lowHeightFt: isAtticFloor ? 8 : lowHeightFt,
+    });
+  }, [
+    canSubmit,
+    color,
+    customLabel,
+    effectiveCeilingType,
+    effectiveUnconditioned,
+    heightFt,
+    highHeightFt,
+    isLiveChangeReady,
+    isAtticFloor,
+    isOpen,
+    labelOption,
+    lowHeightFt,
+    standardHeightFt,
+    supportsCustomLabel,
+    widthFt,
+  ]);
+
   if (!isOpen) {
     return null;
   }
 
+  const isDocked = variant === "docked";
+
   return (
-    <div className="modal-backdrop" onPointerDown={onCancel}>
-      <section className="rectangle-modal" onPointerDown={(event) => event.stopPropagation()}>
+    <div
+      className={`modal-backdrop ${isDocked ? "modal-backdrop-docked" : ""}`}
+      onPointerDown={isDocked ? undefined : onCancel}
+    >
+      <section
+        className={`rectangle-modal ${isDocked ? "modal-panel-docked" : ""}`}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        {isDocked && onCollapse && (
+          <button
+            type="button"
+            className="modal-panel-collapse-btn"
+            aria-label="Collapse edit panel"
+            title="Collapse"
+            onClick={onCollapse}
+          >
+            ▼
+          </button>
+        )}
         <h2>RECTANGLE</h2>
 
         <div className="modal-row">
@@ -377,12 +452,12 @@ export function RectangleModal({
         </div>
 
         <div className="modal-row">
-          <label>WIDTH:</label>
+          <label>{widthLabel}</label>
           <StepperField value={widthFt} onChange={setWidthFt} />
         </div>
 
         <div className="modal-row">
-          <label>HEIGHT:</label>
+          <label>{heightLabel}</label>
           <StepperField value={heightFt} onChange={setHeightFt} />
         </div>
 

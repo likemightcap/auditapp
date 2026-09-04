@@ -7,6 +7,7 @@ export interface BumpOutModalSubmit {
 
 interface BumpOutModalProps {
   isOpen: boolean;
+  variant?: "modal" | "docked";
   initialFlats: 3 | 4 | 5 | 6;
   initialLongEdgeFt: number;
   onCancel: () => void;
@@ -40,7 +41,14 @@ const FLAT_OPTIONS: Array<{ flats: 3 | 4 | 5 | 6 }> = [
   { flats: 6 },
 ];
 
-export function BumpOutModal({ isOpen, initialFlats, initialLongEdgeFt, onCancel, onSubmit }: BumpOutModalProps) {
+export function BumpOutModal({
+  isOpen,
+  variant = "modal",
+  initialFlats,
+  initialLongEdgeFt,
+  onCancel,
+  onSubmit,
+}: BumpOutModalProps) {
   const [flats, setFlats] = useState<3 | 4 | 5 | 6>(5);
   const [longEdgeFt, setLongEdgeFt] = useState(8);
   const [longEdgeDraft, setLongEdgeDraft] = useState("8");
@@ -61,9 +69,17 @@ export function BumpOutModal({ isOpen, initialFlats, initialLongEdgeFt, onCancel
     return null;
   }
 
+  const isDocked = variant === "docked";
+
   return (
-    <div className="modal-backdrop" onPointerDown={onCancel}>
-      <section className="text-modal bumpout-modal" onPointerDown={(event) => event.stopPropagation()}>
+    <div
+      className={`modal-backdrop ${isDocked ? "modal-backdrop-docked" : ""}`}
+      onPointerDown={isDocked ? undefined : onCancel}
+    >
+      <section
+        className={`text-modal bumpout-modal ${isDocked ? "modal-panel-docked" : ""}`}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
         <h2>BUMP OUT</h2>
 
         <div className="modal-row">

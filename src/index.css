@@ -194,6 +194,35 @@ select {
   color: #ffffff;
 }
 
+.tool-btn-has-options::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  border-bottom-right-radius: 10px;
+  background: linear-gradient(135deg, transparent 49%, #2f5f98 50%);
+  pointer-events: none;
+}
+
+.tool-btn-has-options::before {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 8px;
+  height: 1.4px;
+  background: rgba(255, 255, 255, 0.85);
+  transform: rotate(-45deg);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.tool-btn-has-options.active::after {
+  background: linear-gradient(135deg, transparent 49%, #123e76 50%);
+}
+
 .tool-btn .icon {
   font-size: 1.4rem;
   line-height: 1;
@@ -776,8 +805,8 @@ select {
 
 .workspace-orientation-stack {
   position: absolute;
-  left: 14px;
-  bottom: 14px;
+  top: 12px;
+  right: 12px;
   z-index: 11;
   display: flex;
   flex-direction: column;
@@ -1264,6 +1293,81 @@ select {
   padding: 18px;
 }
 
+.modal-backdrop-docked {
+  inset: auto;
+  top: 10px;
+  bottom: 10px;
+  left: 44px;
+  right: auto;
+  width: min(360px, calc(100vw - 20px));
+  z-index: 19;
+  background: none;
+  backdrop-filter: none;
+  display: block;
+  padding: 0;
+  pointer-events: none;
+}
+
+.modal-panel-docked {
+  position: relative;
+  width: 100% !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+  height: 100%;
+  border-radius: 0 16px 16px 0;
+  border-left: 0;
+  padding: 16px 14px 14px;
+  overflow: auto;
+  pointer-events: auto;
+}
+
+.modal-panel-docked::before {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 22px;
+  width: 10px;
+  height: calc(100% - 44px);
+  border-radius: 8px 0 0 8px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(238, 246, 255, 0.86));
+  border: 1px solid rgba(194, 210, 232, 0.65);
+  border-right: 0;
+  box-shadow: -3px 0 8px rgba(19, 44, 83, 0.09);
+}
+
+.modal-panel-collapse-btn {
+  position: absolute;
+  right: 14px;
+  top: 14px;
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(194, 210, 232, 0.85);
+  border-radius: 8px;
+  background: linear-gradient(180deg, #ffffff 0%, #edf4ff 100%);
+  color: #295187;
+  font-size: 0.74rem;
+  font-weight: 900;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(19, 44, 83, 0.16);
+  pointer-events: auto;
+}
+
+.modal-panel-collapse-btn:hover {
+  filter: brightness(1.04);
+}
+
+.workspace-collapsed-edit-btn {
+  left: 12px;
+  right: auto;
+  top: auto;
+  bottom: 14px;
+  z-index: 12;
+}
+
 .rectangle-modal {
   width: min(640px, calc(100vw - 32px));
   max-height: min(92vh, 780px);
@@ -1290,10 +1394,15 @@ select {
   gap: 10px;
 }
 
+.modal-backdrop-docked .rectangle-modal,
+.modal-backdrop-docked .text-modal {
+  width: 100%;
+}
+
 .text-modal h2 {
   margin: 0;
   color: #1f3f6d;
-  padding: 0 0 8px;
+  padding: 0 40px 8px 0;
   border-radius: 0;
   letter-spacing: 0.03em;
   font-family: var(--font-title);
@@ -1325,7 +1434,7 @@ select {
 .rectangle-modal h2 {
   margin: 0;
   color: #1f3f6d;
-  padding: 0 0 8px;
+  padding: 0 40px 8px 0;
   border-radius: 0;
   letter-spacing: 0.03em;
   font-family: var(--font-title);
@@ -1342,6 +1451,17 @@ select {
   gap: 10px;
   align-items: center;
   width: 100%;
+}
+
+.modal-backdrop-docked .modal-row {
+  grid-template-columns: 1fr;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.modal-backdrop-docked .modal-row label {
+  padding: 0;
+  line-height: 1.2;
 }
 
 .modal-row label {
@@ -1562,12 +1682,21 @@ select {
   width: 100%;
 }
 
+.modal-backdrop-docked .dual-heights {
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
 .compact-input-row {
   display: grid;
   grid-template-columns: 86px minmax(0, 1fr);
   gap: 8px;
   align-items: center;
   width: 100%;
+}
+
+.modal-backdrop-docked .compact-input-row {
+  grid-template-columns: minmax(74px, 34%) minmax(0, 1fr);
 }
 
 .compact-input-row label {
@@ -1585,6 +1714,16 @@ select {
   justify-content: flex-end;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.modal-backdrop-docked .modal-actions {
+  margin-top: 10px;
+  justify-content: stretch;
+}
+
+.modal-backdrop-docked .modal-actions button {
+  flex: 1 1 120px;
+  min-width: 0;
 }
 
 .modal-actions button {
@@ -1642,6 +1781,20 @@ select {
 
 .bumpout-modal {
   width: min(620px, calc(100vw - 32px));
+}
+
+@media (max-width: 900px) {
+  .modal-backdrop-docked {
+    left: 36px;
+    top: 6px;
+    bottom: 6px;
+    width: min(332px, calc(100vw - 12px));
+  }
+
+  .modal-panel-docked {
+    border-radius: 0 14px 14px 0;
+    padding: 14px 12px 12px;
+  }
 }
 
 .export-pdf-modal {
@@ -2060,8 +2213,8 @@ select {
   }
 
   .workspace-orientation-stack {
-    left: 10px;
-    bottom: 10px;
+    top: 10px;
+    right: 10px;
     gap: 8px;
   }
 
@@ -2082,6 +2235,18 @@ select {
   .workspace-tool-lock-btn {
     left: 10px;
     right: auto;
+  }
+
+  .workspace-collapsed-edit-btn {
+    left: 10px;
+    bottom: 10px;
+  }
+
+  .modal-panel-collapse-btn {
+    right: 12px;
+    top: 12px;
+    width: 28px;
+    height: 28px;
   }
 
   .workspace-edit-btn-icon {

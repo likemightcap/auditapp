@@ -8,12 +8,15 @@ export interface DoorModalSubmit {
 
 interface DoorModalProps {
   isOpen: boolean;
+  variant?: "modal" | "docked";
+  onCollapse?: () => void;
   title?: string;
   initialWidthFt: number;
   initialHeightFt: number;
   initialMirrored: boolean;
   onCancel: () => void;
   onSubmit: (payload: DoorModalSubmit) => void;
+  onLiveChange?: (payload: DoorModalSubmit) => void;
 }
 
 function clampToPositiveInt(value: number): number {
@@ -25,23 +28,28 @@ function clampToPositiveInt(value: number): number {
 
 export function DoorModal({
   isOpen,
+  variant = "modal",
+  onCollapse,
   title = "DOOR",
   initialWidthFt,
   initialHeightFt,
   initialMirrored,
   onCancel,
   onSubmit,
+  onLiveChange,
 }: DoorModalProps) {
   const [widthFt, setWidthFt] = useState(3);
   const [heightFt, setHeightFt] = useState(7);
   const [widthDraft, setWidthDraft] = useState("3");
   const [heightDraft, setHeightDraft] = useState("7");
   const [mirrored, setMirrored] = useState(false);
+  const [isLiveChangeReady, setIsLiveChangeReady] = useState(false);
 
   useEffect(() => {
     if (!isOpen) {
       return;
     }
+    setIsLiveChangeReady(false);
     const nextWidth = clampToPositiveInt(initialWidthFt);
     const nextHeight = clampToPositiveInt(initialHeightFt);
     setWidthFt(nextWidth);
@@ -51,15 +59,50 @@ export function DoorModal({
     setMirrored(Boolean(initialMirrored));
   }, [initialHeightFt, initialMirrored, initialWidthFt, isOpen]);
 
+  useEffect(() => {
+    if (!isOpen) {
+      setIsLiveChangeReady(false);
+      return;
+    }
+    const frame = requestAnimationFrame(() => setIsLiveChangeReady(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [initialHeightFt, initialMirrored, initialWidthFt, isOpen]);
+
   const canSubmit = useMemo(() => widthFt >= 1 && heightFt >= 1, [heightFt, widthFt]);
+
+  useEffect(() => {
+    if (!isOpen || !onLiveChange || !canSubmit || !isLiveChangeReady) {
+      return;
+    }
+    onLiveChange({ widthFt, heightFt, mirrored });
+  }, [canSubmit, heightFt, isLiveChangeReady, isOpen, mirrored, widthFt]);
 
   if (!isOpen) {
     return null;
   }
 
+  const isDocked = variant === "docked";
+
   return (
-    <div className="modal-backdrop" onPointerDown={onCancel}>
-      <section className="text-modal" onPointerDown={(event) => event.stopPropagation()}>
+    <div
+      className={`modal-backdrop ${isDocked ? "modal-backdrop-docked" : ""}`}
+      onPointerDown={isDocked ? undefined : onCancel}
+    >
+      <section
+        className={`text-modal ${isDocked ? "modal-panel-docked" : ""}`}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        {isDocked && onCollapse && (
+          <button
+            type="button"
+            className="modal-panel-collapse-btn"
+            aria-label="Collapse edit panel"
+            title="Collapse"
+            onClick={onCollapse}
+          >
+            ▼
+          </button>
+        )}
         <h2>{title}</h2>
 
         <div className="modal-row">

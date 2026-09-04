@@ -7,10 +7,13 @@ export interface SlidingGlassDoorModalSubmit {
 
 interface SlidingGlassDoorModalProps {
   isOpen: boolean;
+  variant?: "modal" | "docked";
+  onCollapse?: () => void;
   initialWidthFt: number;
   initialHeightFt: number;
   onCancel: () => void;
   onSubmit: (payload: SlidingGlassDoorModalSubmit) => void;
+  onLiveChange?: (payload: SlidingGlassDoorModalSubmit) => void;
 }
 
 function clampToPositiveInt(value: number): number {
@@ -22,20 +25,25 @@ function clampToPositiveInt(value: number): number {
 
 export function SlidingGlassDoorModal({
   isOpen,
+  variant = "modal",
+  onCollapse,
   initialWidthFt,
   initialHeightFt,
   onCancel,
   onSubmit,
+  onLiveChange,
 }: SlidingGlassDoorModalProps) {
   const [widthFt, setWidthFt] = useState(6);
   const [heightFt, setHeightFt] = useState(7);
   const [widthDraft, setWidthDraft] = useState("6");
   const [heightDraft, setHeightDraft] = useState("7");
+  const [isLiveChangeReady, setIsLiveChangeReady] = useState(false);
 
   useEffect(() => {
     if (!isOpen) {
       return;
     }
+    setIsLiveChangeReady(false);
     const nextWidth = clampToPositiveInt(initialWidthFt);
     const nextHeight = clampToPositiveInt(initialHeightFt);
     setWidthFt(nextWidth);
@@ -44,15 +52,50 @@ export function SlidingGlassDoorModal({
     setHeightDraft(String(nextHeight));
   }, [initialHeightFt, initialWidthFt, isOpen]);
 
+  useEffect(() => {
+    if (!isOpen) {
+      setIsLiveChangeReady(false);
+      return;
+    }
+    const frame = requestAnimationFrame(() => setIsLiveChangeReady(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [initialHeightFt, initialWidthFt, isOpen]);
+
   const canSubmit = useMemo(() => widthFt >= 1 && heightFt >= 1, [heightFt, widthFt]);
+
+  useEffect(() => {
+    if (!isOpen || !onLiveChange || !canSubmit || !isLiveChangeReady) {
+      return;
+    }
+    onLiveChange({ widthFt, heightFt });
+  }, [canSubmit, heightFt, isLiveChangeReady, isOpen, widthFt]);
 
   if (!isOpen) {
     return null;
   }
 
+  const isDocked = variant === "docked";
+
   return (
-    <div className="modal-backdrop" onPointerDown={onCancel}>
-      <section className="text-modal" onPointerDown={(event) => event.stopPropagation()}>
+    <div
+      className={`modal-backdrop ${isDocked ? "modal-backdrop-docked" : ""}`}
+      onPointerDown={isDocked ? undefined : onCancel}
+    >
+      <section
+        className={`text-modal ${isDocked ? "modal-panel-docked" : ""}`}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        {isDocked && onCollapse && (
+          <button
+            type="button"
+            className="modal-panel-collapse-btn"
+            aria-label="Collapse edit panel"
+            title="Collapse"
+            onClick={onCollapse}
+          >
+            ▼
+          </button>
+        )}
         <h2>SLIDING GLASS DOOR</h2>
 
         <div className="modal-row">

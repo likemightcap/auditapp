@@ -328,6 +328,9 @@ function applyExportThemePreset(svg: SVGSVGElement, preset: ExportPdfThemePreset
 }
 
 function applyExportVisibilityOptions(svg: SVGSVGElement, options: ExportPdfStyleOptions): void {
+  // Always exclude the supporting-floor ghost overlay from PDF captures.
+  removeElementsBySelector(svg, ".workspace-floorplan-ghost");
+
   if (options.hideGrid) {
     for (const line of getGridLines(svg)) {
       line.remove();
@@ -631,12 +634,6 @@ function buildPdfDetailsLines(report: ReturnType<typeof calculateProjectDetailsR
       lines.push({ text: `• ${sizeKey}: ${data.count} (${data.totalAreaFt2.toFixed(0)} ft²)`, style: "row" });
     }
 
-    for (const opening of sideSummary.openings) {
-      lines.push({
-        text: `• ${opening.kind === "window" ? "Window" : "Door"} ${opening.sizeLabel} - ${opening.floorName}: ${opening.areaFt2.toFixed(0)} ft²`,
-        style: "row",
-      });
-    }
   }
 
   return lines;
@@ -809,10 +806,11 @@ async function downloadLevelsPdf(
         height: targetHeight,
       });
 
+      const compassSize = Math.min(64, Math.max(44, targetWidth * 0.12));
       drawPdfCompass(page, {
-        x: x + 8,
-        y: y + 8,
-        size: Math.min(64, Math.max(44, targetWidth * 0.12)),
+        x: x + targetWidth - compassSize - 8,
+        y: y + targetHeight - compassSize - 8,
+        size: compassSize,
         orientation: details.totals.frontDoorOrientation,
         font: textFont,
         icon: compassIconImage,
@@ -1050,11 +1048,14 @@ function ToolGroup({
       <h3>{title}</h3>
       <div className="tool-grid">
         {orderedTools.map((tool) => (
+          (() => {
+            const hasLongPressOptions = tool.id === "rectangle" || tool.id === "door";
+            return (
           <button
             key={tool.id}
             ref={tool.id === "door" ? doorButtonRef : tool.id === "rectangle" ? rectangleButtonRef : undefined}
             type="button"
-            className={`tool-btn ${state.activeTool === tool.id ? "active" : ""}`}
+            className={`tool-btn ${state.activeTool === tool.id ? "active" : ""} ${hasLongPressOptions ? "tool-btn-has-options" : ""}`}
             draggable={false}
             onClick={() => {
               if (isUtilityToolId(tool.id)) {
@@ -1159,6 +1160,8 @@ function ToolGroup({
             <ToolIcon toolId={tool.id} fallback={tool.icon} doorType={tool.id === "door" ? doorType : undefined} />
             <span className="label">{tool.label}</span>
           </button>
+            );
+          })()
         ))}
       </div>
 
@@ -2037,14 +2040,6 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
                           </div>
                         ))}
 
-                        {sideSummary.openings.map((opening, index) => (
-                          <div key={`${opening.id}-${index}`} className="details-breakdown-row details-breakdown-row-indent details-breakdown-row-fine">
-                            <span>
-                              {opening.kind === "window" ? "Window" : "Door"} {opening.sizeLabel} • {opening.floorName}
-                            </span>
-                            <strong>{opening.areaFt2.toFixed(0)} ft²</strong>
-                          </div>
-                        ))}
                       </div>
                     );
                   })}

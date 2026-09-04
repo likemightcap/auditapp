@@ -145,6 +145,17 @@ export type EditorAction =
       entity: MapEntity;
       pushedRectangles: Array<{ id: string; x: number; y: number }>;
     }
+  | {
+      type: "CANCEL_ACTIVE_FLOOR_ENTITY_EDITS";
+      projectSnapshot: Project;
+      historyPastLength: number;
+      historyFuture: Project[];
+    }
+  | {
+      type: "COMMIT_ACTIVE_FLOOR_ENTITY_EDITS";
+      projectSnapshot: Project;
+      historyPastLength: number;
+    }
   | { type: "REMOVE_ENTITY"; entityId: string }
   | { type: "MOVE_ENTITY"; entityId: string; x: number; y: number }
   | { type: "ROTATE_ENTITY"; entityId: string; rotation: number }
