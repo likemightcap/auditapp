@@ -1408,6 +1408,7 @@ interface SlidingDoorModalState {
 
 interface UtilityLabelModalState {
   entityId: string;
+  utilityType: "condenser" | "heater" | "dhw" | "gas" | "electric" | "other";
   initialText: string;
   initialColor: string;
 }
@@ -4389,17 +4390,54 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const tagName = target?.tagName?.toLowerCase();
-      const isEditable =
-        Boolean(target?.isContentEditable) ||
-        tagName === "input" ||
-        tagName === "textarea" ||
-        tagName === "select";
+      const isDeleteKey = event.key === "Delete" || event.key === "Backspace";
 
-      if (isEditable) {
+      const inputType =
+        tagName === "input"
+          ? String((target as HTMLInputElement | null)?.type ?? "").toLowerCase()
+          : "";
+      const isTextEntryField =
+        Boolean(target?.isContentEditable) ||
+        tagName === "textarea" ||
+        (tagName === "input" && (
+          inputType === "" ||
+          inputType === "text" ||
+          inputType === "search" ||
+          inputType === "email" ||
+          inputType === "url" ||
+          inputType === "tel" ||
+          inputType === "password" ||
+          inputType === "number"
+        ));
+
+      if (isDeleteKey && utilityLabelModalState?.entityId && !isTextEntryField) {
+        event.preventDefault();
+        selectionEditSessionRef.current = null;
+        setCollapsedSelectionPanelEntityId(null);
+        setUtilityLabelModalState(null);
+        dispatch({ type: "REMOVE_ENTITY", entityId: utilityLabelModalState.entityId });
+        dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
         return;
       }
 
-      if (event.key === "Delete" || event.key === "Backspace") {
+      if (isTextEntryField) {
+        return;
+      }
+
+      if (isDeleteKey) {
+        if (state.selection.kind === "entity") {
+          const selectedEntityId = state.selection.id;
+          const selectedEntity = floor.entities.find((entity) => entity.id === selectedEntityId);
+          if (selectedEntity && isUtilityEntityType(selectedEntity.type)) {
+            event.preventDefault();
+            selectionEditSessionRef.current = null;
+            setCollapsedSelectionPanelEntityId(null);
+            setUtilityLabelModalState(null);
+            dispatch({ type: "REMOVE_ENTITY", entityId: selectedEntity.id });
+            dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
+            return;
+          }
+        }
         event.preventDefault();
         dispatch({ type: "DELETE_SELECTION" });
       }
@@ -4424,7 +4462,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [dispatch]);
+  }, [dispatch, floor.entities, state.selection, utilityLabelModalState?.entityId]);
 
   useEffect(() => {
     if (state.activeTool !== "door" && state.activeTool !== "window" && state.activeTool !== "bumpout") {
@@ -4633,6 +4671,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
     }
     setUtilityLabelModalState({
       entityId: entity.id,
+      utilityType: entity.type,
       initialText: entity.label ?? "",
       initialColor: String(entity.metadata.color ?? "WHITE").toUpperCase(),
     });
@@ -5226,7 +5265,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
         return;
       }
       dispatch({ type: "UPSERT_ENTITY", entity: placed });
-      dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: placed.id } });
+      dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
       maybeAutoReturnToSelect("bumpout");
       return;
     }
@@ -5343,7 +5382,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
     const entity = createEntityFromTool(tool.entityType, world.x, world.y);
 
     dispatch({ type: "UPSERT_ENTITY", entity });
-    dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: entity.id } });
+    dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
   };
 
   const handlePointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
@@ -6231,11 +6270,9 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
         }
 
         dispatch({ type: "UPSERT_ENTITY", entity: snapped });
+        dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
         if (interaction.entitySnapshot.type === "skylight") {
-          dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: snapped.id } });
           maybeAutoReturnToSelect("skylight");
-        } else {
-          dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
         }
         if (interaction.entitySnapshot.type === "rectangle") {
           maybeAutoReturnToSelect("rectangle");
@@ -6252,7 +6289,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
             : null;
           if (hostRect && isSkylightInsideRectangle(interaction.entitySnapshot, hostRect)) {
             dispatch({ type: "UPSERT_ENTITY", entity: interaction.entitySnapshot });
-            dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: interaction.entitySnapshot.id } });
+            dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
             maybeAutoReturnToSelect("skylight");
           }
         } else if (interaction.sourceRectangleId) {
@@ -6273,7 +6310,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
         ...normalized,
       };
       dispatch({ type: "UPSERT_ENTITY", entity: snapped });
-      dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: snapped.id } });
+      dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
       setDraftEntity(null);
       maybeAutoReturnToSelect("line");
     }
@@ -6535,7 +6572,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
         bumpOutConfig.longEdgeFt,
       );
       dispatch({ type: "UPSERT_ENTITY", entity: placed });
-      dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: placed.id } });
+      dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
       maybeAutoReturnToSelect("bumpout");
       return;
     }
@@ -7463,6 +7500,16 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
   const showCollapsedEditIcon =
     Boolean(selectedEditableEntity) &&
     collapsedSelectionPanelEntityId === selectedEditableEntity?.id;
+  const hideSelectionEditModalDuringInteraction =
+    activeSelectionPanelEntityId !== null &&
+    (
+      (interactionRef.current.type === "drag-entity" &&
+        interactionRef.current.targetId === activeSelectionPanelEntityId) ||
+      interactionRef.current.type === "resize-rect" ||
+      interactionRef.current.type === "resize-window" ||
+      interactionRef.current.type === "resize-skylight" ||
+      (interactionRef.current.type === "pan" && state.selection.kind === "entity")
+    );
   const selectedBumpOutAngleBias = selectedBumpOutEntity ? getBumpOutAngleBias(selectedBumpOutEntity) : 0;
   const handleEntitySmartGuidePointerEnter = (event: ReactPointerEvent<SVGElement>, entity: MapEntity) => {
     const hoverCapableInput = event.pointerType === "mouse" || event.pointerType === "pen";
@@ -9872,34 +9919,36 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
         </button>
       )}
 
-      <div className="workspace-orientation-stack">
-        <div className="workspace-compass" aria-hidden="true">
-          <img src={compassIcon} alt="" className="workspace-compass-icon" />
-          {orientationCompassLabels.map((item) => (
-            <span
-              key={`compass-label-${item.direction}`}
-              className="workspace-compass-label"
-              style={{ left: `${item.xPercent}%`, top: `${item.yPercent}%` }}
-            >
-              {item.label}
-            </span>
-          ))}
-        </div>
+      {state.selection.kind !== "entity" && (
+        <div className="workspace-orientation-stack">
+          <div className="workspace-compass" aria-hidden="true">
+            <img src={compassIcon} alt="" className="workspace-compass-icon" />
+            {orientationCompassLabels.map((item) => (
+              <span
+                key={`compass-label-${item.direction}`}
+                className="workspace-compass-label"
+                style={{ left: `${item.xPercent}%`, top: `${item.yPercent}%` }}
+              >
+                {item.label}
+              </span>
+            ))}
+          </div>
 
-        <button
-          type="button"
-          className="header-orientation-btn workspace-orientation-btn"
-          onPointerDown={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            cycleOrientation();
-          }}
-          aria-label="Cycle orientation"
-          title={`Orientation: ${state.project.orientation}`}
-        >
-          {state.project.orientation}
-        </button>
-      </div>
+          <button
+            type="button"
+            className="header-orientation-btn workspace-orientation-btn"
+            onPointerDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              cycleOrientation();
+            }}
+            aria-label="Cycle orientation"
+            title={`Orientation: ${state.project.orientation}`}
+          >
+            {state.project.orientation}
+          </button>
+        </div>
+      )}
 
       <div
         className="workspace-camera-stack"
@@ -10064,7 +10113,10 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
       )}
 
       <RectangleModal
-        isOpen={rectangleModalState !== null}
+        isOpen={
+          rectangleModalState !== null &&
+          (rectangleModalState.mode !== "edit" || !hideSelectionEditModalDuringInteraction)
+        }
         variant={rectangleModalState?.mode === "edit" ? "docked" : "modal"}
         onCollapse={rectangleModalState?.mode === "edit" ? collapseSelectionPanel : undefined}
         bumpOutHostEdge={activeBumpOutHostEdge}
@@ -10229,7 +10281,10 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
       />
 
       <TextModal
-        isOpen={textModalState !== null}
+        isOpen={
+          textModalState !== null &&
+          (textModalState.mode !== "edit" || !hideSelectionEditModalDuringInteraction)
+        }
         variant={textModalState?.mode === "edit" ? "docked" : "modal"}
         onCollapse={textModalState?.mode === "edit" ? collapseSelectionPanel : undefined}
         mode={textModalState?.mode ?? "create"}
@@ -10290,14 +10345,14 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
           };
 
           dispatch({ type: "UPSERT_ENTITY", entity: textEntity });
-          dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: textEntity.id } });
+          dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
           setTextModalState(null);
           maybeAutoReturnToSelect("text");
         }}
       />
 
       <DoorModal
-        isOpen={doorModalState !== null}
+        isOpen={doorModalState !== null && !hideSelectionEditModalDuringInteraction}
         variant="docked"
         onCollapse={collapseSelectionPanel}
         title={doorModalState?.kind === "double" ? "DOUBLE DOOR" : "DOOR"}
@@ -10352,7 +10407,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
       />
 
       <SlidingGlassDoorModal
-        isOpen={slidingDoorModalState !== null}
+        isOpen={slidingDoorModalState !== null && !hideSelectionEditModalDuringInteraction}
         variant="docked"
         onCollapse={collapseSelectionPanel}
         initialWidthFt={slidingDoorModalState?.initialWidthFt ?? SLIDING_DOOR_DEFAULT_WIDTH}
@@ -10401,7 +10456,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
       />
 
       <WindowModal
-        isOpen={windowModalState !== null}
+        isOpen={windowModalState !== null && !hideSelectionEditModalDuringInteraction}
         variant="docked"
         onCollapse={collapseSelectionPanel}
         title={windowModalState?.title ?? "WINDOW"}
@@ -10462,38 +10517,30 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
       />
 
       <UtilityLabelModal
-        isOpen={utilityLabelModalState !== null}
+        isOpen={utilityLabelModalState !== null && !hideSelectionEditModalDuringInteraction}
         variant="docked"
         onCollapse={collapseSelectionPanel}
         initialValues={{
+          utilityType: utilityLabelModalState?.utilityType ?? "other",
           text: utilityLabelModalState?.initialText ?? "",
           color: utilityLabelModalState?.initialColor ?? "WHITE",
         }}
         onCancel={cancelSelectionFocusMode}
-        onLiveChange={(payload: UtilityLabelSubmit) => {
-          if (!utilityLabelModalState) {
-            return;
+        onSubmit={(payload: UtilityLabelSubmit) => {
+          if (utilityLabelModalState) {
+            const existing = floor.entities.find((entity) => entity.id === utilityLabelModalState.entityId);
+            if (existing && isUtilityEntityType(existing.type)) {
+              const updated: MapEntity = {
+                ...existing,
+                label: payload.text.toUpperCase(),
+                metadata: {
+                  ...existing.metadata,
+                  color: payload.color,
+                },
+              };
+              dispatch({ type: "UPSERT_ENTITY", entity: updated });
+            }
           }
-          if (!hasActiveSelectionEditSessionFor(utilityLabelModalState.entityId)) {
-            return;
-          }
-
-          const existing = floor.entities.find((entity) => entity.id === utilityLabelModalState.entityId);
-          if (!existing || !isUtilityEntityType(existing.type)) {
-            return;
-          }
-
-          const updated: MapEntity = {
-            ...existing,
-            label: payload.text.toUpperCase(),
-            metadata: {
-              ...existing.metadata,
-              color: payload.color,
-            },
-          };
-          dispatch({ type: "UPSERT_ENTITY", entity: updated });
-        }}
-        onSubmit={() => {
           commitSelectionFocusMode();
         }}
       />

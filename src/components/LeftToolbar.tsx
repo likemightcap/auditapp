@@ -1348,18 +1348,12 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
             );
             const sticker = createEntityFromTool(current.toolId as any, world.x, world.y);
             dispatch({ type: "UPSERT_ENTITY", entity: sticker });
-            dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: sticker.id } });
-            dispatch({ type: "SET_TOOL", tool: "select" });
-
             if (sticker.type === "other") {
-              setUtilityLabelModalState({
-                entityId: sticker.id,
-                initialValues: {
-                  text: "",
-                  color: "WHITE",
-                },
-              });
+              dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: sticker.id } });
+            } else {
+              dispatch({ type: "SET_SELECTION", selection: { kind: "none" } });
             }
+            dispatch({ type: "SET_TOOL", tool: "select" });
           }
         }
         return null;
@@ -1401,7 +1395,7 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
   const utilityLabelModal = (
     <UtilityLabelModal
       isOpen={utilityLabelModalState !== null}
-      initialValues={utilityLabelModalState?.initialValues ?? { text: "", color: "WHITE" }}
+      initialValues={utilityLabelModalState?.initialValues ?? { utilityType: "other", text: "", color: "WHITE" }}
       onCancel={() => setUtilityLabelModalState(null)}
       onSubmit={(payload: UtilityLabelSubmit) => {
         if (!utilityLabelModalState) {
@@ -1416,7 +1410,7 @@ export function LeftToolbar({ collapsed, onToggleCollapse }: LeftToolbarProps) {
             return;
           }
         const existing = floor.entities.find((entity) => entity.id === utilityLabelModalState.entityId);
-        if (!existing || existing.type !== "other") {
+        if (!existing || !isUtilityEntityType(existing.type)) {
           setUtilityLabelModalState(null);
           return;
         }
