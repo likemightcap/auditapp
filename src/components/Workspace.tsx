@@ -7838,9 +7838,9 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
           </pattern>
 
           <linearGradient id="workspace-bg" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor="#6baef6" />
-            <stop offset="55%" stopColor="#4f93e7" />
-            <stop offset="100%" stopColor="#3a7fd5" />
+            <stop offset="0%" stopColor="#97bff3" />
+            <stop offset="55%" stopColor="#97bff3" />
+            <stop offset="100%" stopColor="#97bff3" />
           </linearGradient>
         </defs>
 
@@ -7858,7 +7858,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
               strokeWidth={x % 5 === 0 ? 1 : 1}
               vectorEffect="non-scaling-stroke"
               shapeRendering="crispEdges"
-              opacity={x % 5 === 0 ? 0.38 : 0.24}
+              opacity={1}
             />
           ))}
           {horizontalGridLines.map((y) => (
@@ -7872,7 +7872,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
               strokeWidth={y % 5 === 0 ? 1 : 1}
               vectorEffect="non-scaling-stroke"
               shapeRendering="crispEdges"
-              opacity={y % 5 === 0 ? 0.38 : 0.24}
+              opacity={1}
             />
           ))}
 
