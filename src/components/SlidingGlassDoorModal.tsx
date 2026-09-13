@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export interface SlidingGlassDoorModalSubmit {
   widthFt: number;
@@ -38,6 +38,7 @@ export function SlidingGlassDoorModal({
   const [widthDraft, setWidthDraft] = useState("6");
   const [heightDraft, setHeightDraft] = useState("7");
   const [isLiveChangeReady, setIsLiveChangeReady] = useState(false);
+  const initialLivePayloadRef = useRef<SlidingGlassDoorModalSubmit | null>(null);
 
   useEffect(() => {
     if (!isOpen) {
@@ -50,6 +51,10 @@ export function SlidingGlassDoorModal({
     setHeightFt(nextHeight);
     setWidthDraft(String(nextWidth));
     setHeightDraft(String(nextHeight));
+    initialLivePayloadRef.current = {
+      widthFt: nextWidth,
+      heightFt: nextHeight,
+    };
   }, [initialHeightFt, initialWidthFt, isOpen]);
 
   useEffect(() => {
@@ -67,8 +72,13 @@ export function SlidingGlassDoorModal({
     if (!isOpen || !onLiveChange || !canSubmit || !isLiveChangeReady) {
       return;
     }
-    onLiveChange({ widthFt, heightFt });
-  }, [canSubmit, heightFt, isLiveChangeReady, isOpen, widthFt]);
+    const payload: SlidingGlassDoorModalSubmit = { widthFt, heightFt };
+    const baseline = initialLivePayloadRef.current;
+    if (baseline && baseline.widthFt === payload.widthFt && baseline.heightFt === payload.heightFt) {
+      return;
+    }
+    onLiveChange(payload);
+  }, [canSubmit, heightFt, isLiveChangeReady, isOpen, onLiveChange, widthFt]);
 
   if (!isOpen) {
     return null;

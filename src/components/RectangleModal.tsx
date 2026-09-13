@@ -213,6 +213,7 @@ export function RectangleModal({
   const [highHeightFt, setHighHeightFt] = useState(12);
   const [colorManuallySet, setColorManuallySet] = useState(false);
   const [isLiveChangeReady, setIsLiveChangeReady] = useState(false);
+  const initialLivePayloadRef = useRef<RectangleModalSubmit | null>(null);
   const customLabelInputRef = useRef<HTMLInputElement | null>(null);
   const isBasementCrawlspace = isBasementFloor && labelOption === "Crawlspace";
   const isBasementSlab = isBasementFloor && labelOption === "Slab";
@@ -226,16 +227,25 @@ export function RectangleModal({
     }
     setIsLiveChangeReady(false);
     const resolvedLabel = resolveLabelSelection(initialValues.label ?? "", labelOptions);
+    const nextColor = normalizeRectangleColor(initialValues.color);
+    const nextWidthFt = clampToPositiveInt(initialValues.widthFt);
+    const nextHeightFt = clampToPositiveInt(initialValues.heightFt);
+    const nextUnconditioned = Boolean(initialValues.unconditioned);
+    const nextCeilingType = initialValues.ceilingType;
+    const nextStandardHeightFt = clampToPositiveInt(initialValues.standardHeightFt);
+    const nextLowHeightFt = clampToPositiveInt(initialValues.lowHeightFt);
+    const nextHighHeightFt = clampToPositiveInt(initialValues.highHeightFt);
+
     setLabelOption(resolvedLabel.option);
     setCustomLabel(resolvedLabel.customLabel);
-    setColor(normalizeRectangleColor(initialValues.color));
-    setWidthFt(clampToPositiveInt(initialValues.widthFt));
-    setHeightFt(clampToPositiveInt(initialValues.heightFt));
-    setUnconditioned(Boolean(initialValues.unconditioned));
-    setCeilingType(initialValues.ceilingType);
-    setStandardHeightFt(clampToPositiveInt(initialValues.standardHeightFt));
-    setLowHeightFt(clampToPositiveInt(initialValues.lowHeightFt));
-    setHighHeightFt(clampToPositiveInt(initialValues.highHeightFt));
+    setColor(nextColor);
+    setWidthFt(nextWidthFt);
+    setHeightFt(nextHeightFt);
+    setUnconditioned(nextUnconditioned);
+    setCeilingType(nextCeilingType);
+    setStandardHeightFt(nextStandardHeightFt);
+    setLowHeightFt(nextLowHeightFt);
+    setHighHeightFt(nextHighHeightFt);
     setColorManuallySet(false);
 
     if (isAtticFloor) {
@@ -244,6 +254,19 @@ export function RectangleModal({
       setLowHeightFt(8);
       setHighHeightFt(12);
     }
+
+    const isBaselineBasementSlab = isBasementFloor && resolvedLabel.option === "Slab";
+    initialLivePayloadRef.current = {
+      label: supportsCustomLabel && resolvedLabel.option === "Custom" ? resolvedLabel.customLabel.trim() : resolvedLabel.option,
+      color: nextColor,
+      widthFt: nextWidthFt,
+      heightFt: nextHeightFt,
+      unconditioned: isBaselineBasementSlab ? true : nextUnconditioned,
+      ceilingType: isBaselineBasementSlab ? "none" : isAtticFloor ? "standard" : nextCeilingType,
+      standardHeightFt: isAtticFloor ? 8 : nextStandardHeightFt,
+      highHeightFt: isAtticFloor ? 12 : nextHighHeightFt,
+      lowHeightFt: isAtticFloor ? 8 : nextLowHeightFt,
+    };
   }, [initialValues, isAtticFloor, isOpen, labelOptions]);
 
   useEffect(() => {
@@ -299,7 +322,7 @@ export function RectangleModal({
       return;
     }
 
-    onLiveChange({
+    const payload: RectangleModalSubmit = {
       label: supportsCustomLabel && labelOption === "Custom" ? customLabel.trim() : labelOption,
       color,
       widthFt,
@@ -309,7 +332,25 @@ export function RectangleModal({
       standardHeightFt: isAtticFloor ? 8 : standardHeightFt,
       highHeightFt: isAtticFloor ? 12 : highHeightFt,
       lowHeightFt: isAtticFloor ? 8 : lowHeightFt,
-    });
+    };
+
+    const baseline = initialLivePayloadRef.current;
+    if (
+      baseline &&
+      baseline.label === payload.label &&
+      baseline.color === payload.color &&
+      baseline.widthFt === payload.widthFt &&
+      baseline.heightFt === payload.heightFt &&
+      baseline.unconditioned === payload.unconditioned &&
+      baseline.ceilingType === payload.ceilingType &&
+      baseline.standardHeightFt === payload.standardHeightFt &&
+      baseline.highHeightFt === payload.highHeightFt &&
+      baseline.lowHeightFt === payload.lowHeightFt
+    ) {
+      return;
+    }
+
+    onLiveChange(payload);
   }, [
     canSubmit,
     color,
@@ -323,6 +364,7 @@ export function RectangleModal({
     isOpen,
     labelOption,
     lowHeightFt,
+    onLiveChange,
     standardHeightFt,
     supportsCustomLabel,
     widthFt,

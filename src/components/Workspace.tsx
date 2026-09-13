@@ -9352,7 +9352,8 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
                       width={anchor.width + RECT_RESIZE_HANDLE_HIT_SLOP * 2}
                       height={anchor.height + RECT_RESIZE_HANDLE_HIT_SLOP * 2}
                       rx={0.12}
-                      fill="transparent"
+                      fill="rgba(255, 229, 154, 0.001)"
+                      pointerEvents="all"
                       style={{ cursor: canUseHandle(anchor.handle) ? anchor.cursor : "default" }}
                       onPointerEnter={() =>
                         canUseHandle(anchor.handle) &&
@@ -9397,7 +9398,8 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
                       cx={anchor.x}
                       cy={anchor.y}
                       r={RECT_RESIZE_CORNER_ANCHOR_RADIUS + RECT_RESIZE_HANDLE_HIT_SLOP}
-                      fill="transparent"
+                      fill="rgba(255, 229, 154, 0.001)"
+                      pointerEvents="all"
                       style={{ cursor: canUseHandle(anchor.handle) ? anchor.cursor : "default" }}
                       onPointerEnter={() =>
                         canUseHandle(anchor.handle) &&
@@ -9458,7 +9460,8 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
                   y={-WINDOW_RESIZE_ANCHOR_HEIGHT / 2 - WINDOW_HANDLE_HIT_SLOP}
                   width={WINDOW_RESIZE_ANCHOR_WIDTH + WINDOW_HANDLE_HIT_SLOP * 2}
                   height={WINDOW_RESIZE_ANCHOR_HEIGHT + WINDOW_HANDLE_HIT_SLOP * 2}
-                  fill="transparent"
+                  fill="rgba(255, 229, 154, 0.001)"
+                  pointerEvents="all"
                   onPointerEnter={() => setResizeHintZone(selectedWindowEntity.id, "window-start")}
                   onPointerLeave={() => clearResizeHintZone(selectedWindowEntity.id, "window-start")}
                   onPointerDown={(event) => startWindowResize(event, selectedWindowEntity, "start")}
@@ -9494,7 +9497,8 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
                   y={-WINDOW_RESIZE_ANCHOR_HEIGHT / 2 - WINDOW_HANDLE_HIT_SLOP}
                   width={WINDOW_RESIZE_ANCHOR_WIDTH + WINDOW_HANDLE_HIT_SLOP * 2}
                   height={WINDOW_RESIZE_ANCHOR_HEIGHT + WINDOW_HANDLE_HIT_SLOP * 2}
-                  fill="transparent"
+                  fill="rgba(255, 229, 154, 0.001)"
+                  pointerEvents="all"
                   onPointerEnter={() => setResizeHintZone(selectedWindowEntity.id, "window-end")}
                   onPointerLeave={() => clearResizeHintZone(selectedWindowEntity.id, "window-end")}
                   onPointerDown={(event) => startWindowResize(event, selectedWindowEntity, "end")}
@@ -9605,7 +9609,8 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
                       width={anchor.width + RECT_RESIZE_HANDLE_HIT_SLOP * 2}
                       height={anchor.height + RECT_RESIZE_HANDLE_HIT_SLOP * 2}
                       rx={0.12}
-                      fill="transparent"
+                      fill="rgba(255, 229, 154, 0.001)"
+                      pointerEvents="all"
                       style={{ cursor: anchor.cursor }}
                       onPointerEnter={() => setResizeHintZone(selectedSkylightEntity.id, `rect-${anchor.handle}` as ResizeHintZone)}
                       onPointerLeave={() => clearResizeHintZone(selectedSkylightEntity.id, `rect-${anchor.handle}` as ResizeHintZone)}
@@ -9644,7 +9649,8 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
                       cx={anchor.x}
                       cy={anchor.y}
                       r={RECT_RESIZE_CORNER_ANCHOR_RADIUS + RECT_RESIZE_HANDLE_HIT_SLOP}
-                      fill="transparent"
+                      fill="rgba(255, 229, 154, 0.001)"
+                      pointerEvents="all"
                       style={{ cursor: anchor.cursor }}
                       onPointerEnter={() => setResizeHintZone(selectedSkylightEntity.id, `rect-${anchor.handle}` as ResizeHintZone)}
                       onPointerLeave={() => clearResizeHintZone(selectedSkylightEntity.id, `rect-${anchor.handle}` as ResizeHintZone)}

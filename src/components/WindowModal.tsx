@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export interface WindowModalSubmit {
   widthFt: number;
@@ -63,6 +63,7 @@ export function WindowModal({
   const [heightDraft, setHeightDraft] = useState("4");
   const [selectedPreset, setSelectedPreset] = useState<string>(presetKey(3, 4));
   const [isLiveChangeReady, setIsLiveChangeReady] = useState(false);
+  const initialLivePayloadRef = useRef<WindowModalSubmit | null>(null);
 
   useEffect(() => {
     if (!isOpen) {
@@ -77,6 +78,10 @@ export function WindowModal({
     setWidthDraft(String(nextWidth));
     setHeightDraft(String(nextHeight));
     setSelectedPreset(nextPresetKey ?? CUSTOM_PRESET_KEY);
+    initialLivePayloadRef.current = {
+      widthFt: nextWidth,
+      heightFt: nextHeight,
+    };
   }, [initialHeightFt, initialWidthFt, isOpen]);
 
   useEffect(() => {
@@ -99,8 +104,13 @@ export function WindowModal({
     if (!isOpen || !onLiveChange || !canSubmit || !isLiveChangeReady) {
       return;
     }
-    onLiveChange({ widthFt, heightFt });
-  }, [canSubmit, heightFt, isLiveChangeReady, isOpen, widthFt]);
+    const payload: WindowModalSubmit = { widthFt, heightFt };
+    const baseline = initialLivePayloadRef.current;
+    if (baseline && baseline.widthFt === payload.widthFt && baseline.heightFt === payload.heightFt) {
+      return;
+    }
+    onLiveChange(payload);
+  }, [canSubmit, heightFt, isLiveChangeReady, isOpen, onLiveChange, widthFt]);
 
   if (!isOpen) {
     return null;

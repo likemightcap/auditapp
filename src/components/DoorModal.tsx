@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 export interface DoorModalSubmit {
   widthFt: number;
@@ -44,6 +44,7 @@ export function DoorModal({
   const [heightDraft, setHeightDraft] = useState("7");
   const [mirrored, setMirrored] = useState(false);
   const [isLiveChangeReady, setIsLiveChangeReady] = useState(false);
+  const initialLivePayloadRef = useRef<DoorModalSubmit | null>(null);
 
   useEffect(() => {
     if (!isOpen) {
@@ -57,6 +58,11 @@ export function DoorModal({
     setWidthDraft(String(nextWidth));
     setHeightDraft(String(nextHeight));
     setMirrored(Boolean(initialMirrored));
+    initialLivePayloadRef.current = {
+      widthFt: nextWidth,
+      heightFt: nextHeight,
+      mirrored: Boolean(initialMirrored),
+    };
   }, [initialHeightFt, initialMirrored, initialWidthFt, isOpen]);
 
   useEffect(() => {
@@ -74,8 +80,18 @@ export function DoorModal({
     if (!isOpen || !onLiveChange || !canSubmit || !isLiveChangeReady) {
       return;
     }
-    onLiveChange({ widthFt, heightFt, mirrored });
-  }, [canSubmit, heightFt, isLiveChangeReady, isOpen, mirrored, widthFt]);
+    const payload: DoorModalSubmit = { widthFt, heightFt, mirrored };
+    const baseline = initialLivePayloadRef.current;
+    if (
+      baseline &&
+      baseline.widthFt === payload.widthFt &&
+      baseline.heightFt === payload.heightFt &&
+      baseline.mirrored === payload.mirrored
+    ) {
+      return;
+    }
+    onLiveChange(payload);
+  }, [canSubmit, heightFt, isLiveChangeReady, isOpen, mirrored, onLiveChange, widthFt]);
 
   if (!isOpen) {
     return null;
