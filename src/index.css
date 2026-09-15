@@ -735,7 +735,6 @@ select {
 
 .main-stage {
   position: relative;
-  z-index: 1;
   flex: 1;
   min-width: 0;
   display: flex;
@@ -1294,13 +1293,14 @@ select {
 }
 
 .modal-backdrop-docked {
+  position: fixed;
   inset: auto;
-  top: 10px;
-  bottom: 10px;
-  left: 44px;
+  top: 60px;
+  bottom: 66px;
+  left: 10px;
   right: auto;
   width: min(360px, calc(100vw - 20px));
-  z-index: 19;
+  z-index: 120;
   background: none;
   backdrop-filter: none;
   display: block;
@@ -1315,6 +1315,8 @@ select {
   max-height: 100% !important;
   height: 100%;
   border-radius: 0 16px 16px 0;
+  background: linear-gradient(180deg, #dce7f5 0%, #d2deef 100%);
+  border-color: rgba(183, 199, 222, 0.9);
   border-left: 0;
   padding: 16px 14px 14px;
   overflow: auto;
@@ -1397,6 +1399,9 @@ select {
 .modal-backdrop-docked .rectangle-modal,
 .modal-backdrop-docked .text-modal {
   width: 100%;
+  background: linear-gradient(180deg, #dce7f5 0%, #d2deef 100%);
+  border-color: rgba(183, 199, 222, 0.9);
+  box-shadow: 0 14px 30px rgba(19, 44, 83, 0.18), 0 4px 10px rgba(19, 44, 83, 0.1);
 }
 
 .text-modal h2 {
@@ -1474,7 +1479,7 @@ select {
 }
 
 .modal-row select,
-.modal-row input {
+.modal-row input:not([type="checkbox"]):not([type="radio"]) {
   border: 1px solid #c5d6ec;
   border-radius: 10px;
   background: #ffffff;
@@ -1496,6 +1501,40 @@ select {
   gap: 10px;
   min-height: 44px;
   flex-wrap: wrap;
+}
+
+.heater-zone-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  align-items: stretch;
+}
+
+.heater-zone-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  padding: 0.28rem 0.42rem;
+  border: 1px solid rgba(164, 189, 217, 0.55);
+  border-radius: 0.5rem;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.heater-zone-checkbox {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  flex: 0 0 auto;
+  accent-color: #2a5da6;
+}
+
+.heater-zone-label {
+  white-space: nowrap;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .modal-color-chip {
@@ -1577,7 +1616,7 @@ select {
 }
 
 .modal-row select:focus,
-.modal-row input:focus {
+.modal-row input:not([type="checkbox"]):not([type="radio"]):focus {
   outline: none;
   border-color: #3f6da6;
   box-shadow: 0 0 0 3px rgba(89, 129, 184, 0.2);
@@ -1687,6 +1726,11 @@ select {
   gap: 8px;
 }
 
+
+.modal-backdrop-docked .rectangle-modal,
+.modal-backdrop-docked .text-modal {
+  gap: 8px;
+}
 .compact-input-row {
   display: grid;
   grid-template-columns: 86px minmax(0, 1fr);
@@ -1724,6 +1768,64 @@ select {
 .modal-backdrop-docked .modal-actions button {
   flex: 1 1 120px;
   min-width: 0;
+}
+
+.modal-backdrop-docked .modal-row label {
+  font-size: 0.74rem;
+}
+
+.modal-backdrop-docked .modal-row select,
+.modal-backdrop-docked .modal-row input:not([type="checkbox"]):not([type="radio"]),
+.modal-backdrop-docked .modal-inline-button {
+  min-height: 38px;
+  font-size: 0.88rem;
+  padding: 0 10px;
+}
+
+.modal-backdrop-docked .modal-chip-row {
+  gap: 7px;
+  min-height: 36px;
+}
+
+.modal-backdrop-docked .stepper {
+  grid-template-columns: 32px minmax(0, 1fr) 16px 32px;
+  gap: 6px;
+  padding: 4px 6px;
+}
+
+.modal-backdrop-docked .stepper button {
+  min-height: 28px;
+  font-size: 0.9rem;
+}
+
+.modal-backdrop-docked .stepper input {
+  min-height: 28px;
+  font-size: 0.9rem;
+}
+
+.modal-backdrop-docked .stepper .unit {
+  font-size: 0.84rem;
+}
+
+.modal-backdrop-docked .modal-actions button {
+  min-height: 36px;
+}
+
+.modal-backdrop-docked .heater-zone-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  align-items: stretch;
+}
+
+.modal-backdrop-docked .heater-zone-chip {
+  width: 100%;
+  justify-content: center;
+  padding: 0.22rem 0.28rem;
+}
+
+.modal-backdrop-docked .heater-zone-label {
+  font-size: 0.66rem;
 }
 
 .modal-actions button {
@@ -1785,15 +1887,34 @@ select {
 
 @media (max-width: 900px) {
   .modal-backdrop-docked {
-    left: 36px;
-    top: 6px;
-    bottom: 6px;
-    width: min(332px, calc(100vw - 12px));
+    left: 8px;
+    top: 52px;
+    bottom: 60px;
+    width: min(332px, calc(100vw - 16px));
   }
 
   .modal-panel-docked {
     border-radius: 0 14px 14px 0;
     padding: 14px 12px 12px;
+  }
+}
+
+@media (max-width: 1180px), (max-height: 900px) {
+  .modal-backdrop-docked {
+    width: min(328px, calc(100vw - 18px));
+    top: 54px;
+    bottom: 62px;
+  }
+
+  .modal-panel-docked {
+    padding: 12px 10px 10px;
+  }
+
+  .modal-backdrop-docked .modal-panel-collapse-btn {
+    width: 26px;
+    height: 26px;
+    right: 10px;
+    top: 10px;
   }
 }
 

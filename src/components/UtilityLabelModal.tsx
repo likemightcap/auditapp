@@ -268,36 +268,18 @@ export function UtilityLabelModal({
         {initialValues.utilityType === "heater" && (
           <div className="modal-row">
             <label>ZONES:</label>
-            <div className="modal-chip-row" role="group" aria-label="Heater zones">
+            <div className="modal-chip-row heater-zone-row" role="group" aria-label="Heater zones">
               {HEATER_ZONES.map((zone) => {
                 const checked = heaterZone === zone;
                 return (
-                  <label
-                    key={zone}
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: "0.3rem",
-                      padding: "0.25rem 0.45rem",
-                      border: "1px solid rgba(164, 189, 217, 0.55)",
-                      borderRadius: "0.5rem",
-                      cursor: "pointer",
-                    }}
-                  >
+                  <label key={zone} className="heater-zone-chip">
                     <input
+                      className="heater-zone-checkbox"
                       type="checkbox"
                       checked={checked}
                       onChange={() => setHeaterZone((current) => (current === zone ? "" : zone))}
                     />
-                    <span
-                      style={{
-                        whiteSpace: "nowrap",
-                        fontSize: "0.66rem",
-                        lineHeight: 1,
-                      }}
-                    >
-                      {zone}
-                    </span>
+                    <span className="heater-zone-label">{zone}</span>
                   </label>
                 );
               })}
