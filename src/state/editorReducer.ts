@@ -48,7 +48,7 @@ export function createInitialProject(): Project {
       windowDefaultWidthFt: 3,
       windowDefaultHeightFt: 4,
       doorDefaultType: "single",
-      bumpOutFlats: 5,
+      bumpOutFlats: 3,
       bumpOutLongEdgeFt: 10,
       toolLockEnabled: false,
       lockedToolId: null,

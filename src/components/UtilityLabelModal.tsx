@@ -13,6 +13,10 @@ const UTILITY_PRESET_OPTIONS: Record<UtilityEntityType, string[]> = {
   gas: ["Natural Gas", "Propane", "Gas Meter", "Regulator", "Shutoff", "Other"],
   electric: ["Main Panel", "Subpanel", "Meter", "Disconnect", "Other"],
   other: [
+    "Attic Hatch",
+    "Kneewall Hatch",
+    "Pull Down Stairs",
+    "Fireplace",
     "Mini Split",
     "Generator",
     "Well Pump",

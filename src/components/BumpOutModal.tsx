@@ -49,7 +49,7 @@ export function BumpOutModal({
   onCancel,
   onSubmit,
 }: BumpOutModalProps) {
-  const [flats, setFlats] = useState<3 | 4 | 5 | 6>(5);
+  const [flats, setFlats] = useState<3 | 4 | 5 | 6>(initialFlats);
   const [longEdgeFt, setLongEdgeFt] = useState(8);
   const [longEdgeDraft, setLongEdgeDraft] = useState("8");
 

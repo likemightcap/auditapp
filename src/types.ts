@@ -26,6 +26,16 @@ export type ToolId =
 
 export type EntityType = Exclude<ToolId, "select" | "wall" | "bumpout">;
 
+export type CeilingType =
+  | "standard"
+  | "cathedral"
+  | "cathedral-horizontal"
+  | "cape-cod"
+  | "cape-cod-horizontal"
+  | "sloped"
+  | "sloped-horizontal"
+  | "none";
+
 export interface Point {
   x: number;
   y: number;
@@ -54,10 +64,11 @@ export interface MapEntity {
   label: string;
   metadata: {
     color?: string;
-    ceilingType?: "standard" | "cathedral" | "cathedral-horizontal" | "sloped" | "sloped-horizontal" | "none";
+    ceilingType?: CeilingType;
     standardHeightFt?: number;
     lowHeightFt?: number;
     highHeightFt?: number;
+    capeCodCenterRatio?: number;
     [key: string]: string | number | boolean | undefined;
   };
 }

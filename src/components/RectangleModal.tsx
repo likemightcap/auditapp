@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { FloorPreset } from "../types";
-
-export type CeilingType = "standard" | "cathedral" | "cathedral-horizontal" | "sloped" | "sloped-horizontal" | "none";
+import type { CeilingType, FloorPreset } from "../types";
+import { CAPE_COD_MIN_SPAN_FT, isCapeCodCeiling } from "../utils/capeCodCeiling";
 
 export interface RectangleModalSubmit {
   label: string;
@@ -34,13 +33,11 @@ interface RectangleModalProps {
 const COLORS = ["BLUE", "GREEN", "RED", "YELLOW"] as const;
 const STANDARD_LABEL_OPTIONS = [
   "",
-  "Main Structure",
   "Garage",
   "Kneewall",
-  "Addition",
   "Sunroom",
-  "Bump-Out",
-  "Entry",
+  "Porch/Patio",
+  "Car Port",
   "Garage (conditioned)",
   "Custom",
 ] as const;
@@ -85,6 +82,7 @@ function defaultRectangleColorForOptions(unconditioned: boolean, ceilingType: Ce
   if (
     ceilingType === "cathedral" ||
     ceilingType === "cathedral-horizontal" ||
+    isCapeCodCeiling(ceilingType) ||
     ceilingType === "sloped" ||
     ceilingType === "sloped-horizontal"
   ) {
@@ -220,6 +218,8 @@ export function RectangleModal({
   const showBasementCrawlspaceUnconditioned = isBasementCrawlspace && !floorUnconditioned;
   const effectiveUnconditioned = isBasementSlab ? true : unconditioned;
   const effectiveCeilingType: CeilingType = isBasementSlab ? "none" : ceilingType;
+  const capeCodSpanFt = effectiveCeilingType === "cape-cod-horizontal" ? heightFt : widthFt;
+  const capeCodSizeError = isCapeCodCeiling(effectiveCeilingType) && capeCodSpanFt < CAPE_COD_MIN_SPAN_FT;
 
   useEffect(() => {
     if (!isOpen) {
@@ -301,11 +301,14 @@ export function RectangleModal({
     if (effectiveCeilingType === "standard") {
       return standardHeightFt >= 1;
     }
-    if (effectiveCeilingType === "cathedral" || effectiveCeilingType === "cathedral-horizontal") {
+    if (capeCodSizeError) {
+      return false;
+    }
+    if (effectiveCeilingType === "cathedral" || effectiveCeilingType === "cathedral-horizontal" || isCapeCodCeiling(effectiveCeilingType)) {
       return lowHeightFt >= 1 && highHeightFt >= 1 && highHeightFt >= lowHeightFt;
     }
     return lowHeightFt >= 1 && highHeightFt >= 1;
-  }, [effectiveCeilingType, heightFt, highHeightFt, isAtticFloor, lowHeightFt, standardHeightFt, widthFt]);
+  }, [capeCodSizeError, effectiveCeilingType, heightFt, highHeightFt, isAtticFloor, lowHeightFt, standardHeightFt, widthFt]);
 
   const sideLabels = useMemo(() => {
     if (ceilingType === "sloped-horizontal") {
@@ -409,7 +412,13 @@ export function RectangleModal({
                 setCustomLabel("");
               }
 
-              if (nextOption === "Garage" || nextOption === "Sunroom" || nextOption === "Kneewall") {
+              if (
+                nextOption === "Garage" ||
+                nextOption === "Sunroom" ||
+                nextOption === "Kneewall" ||
+                nextOption === "Car Port" ||
+                nextOption === "Porch/Patio"
+              ) {
                 setUnconditioned(true);
                 setColor("RED");
                 setColorManuallySet(false);
@@ -561,10 +570,22 @@ export function RectangleModal({
                 <option value="standard">STANDARD</option>
                 <option value="cathedral">CATHEDRAL (VERTICAL)</option>
                 <option value="cathedral-horizontal">CATHEDRAL (HORIZONTAL)</option>
+                <option value="cape-cod" disabled={bumpOutHostEdge !== null}>CAPE COD (VERTICAL)</option>
+                <option value="cape-cod-horizontal" disabled={bumpOutHostEdge !== null}>CAPE COD (HORIZONTAL)</option>
                 <option value="sloped">SLOPED (VERTICAL)</option>
                 <option value="sloped-horizontal">SLOPED (HORIZONTAL)</option>
               </select>
             </div>
+
+            {isCapeCodCeiling(effectiveCeilingType) && (
+              <p role={capeCodSizeError || highHeightFt < lowHeightFt ? "alert" : undefined}>
+                {capeCodSizeError
+                  ? "Cape Cod requires at least 6 feet across the three sections. Increase the width (vertical) or height (horizontal)."
+                  : highHeightFt < lowHeightFt
+                    ? "HIGH must be greater than or equal to LOW."
+                    : "Drag either dotted divider in focus mode to resize the flat center. Both slopes stay equal; each section is at least 2 feet wide."}
+              </p>
+            )}
 
             {effectiveCeilingType === "none" ? null : effectiveCeilingType === "standard" ? (
               <div className="modal-row">

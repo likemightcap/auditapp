@@ -1,4 +1,5 @@
 import type { Project } from "../types";
+import { capeCodAverageHeight, getCapeCodGeometry, isCapeCodCeiling } from "./capeCodCeiling.ts";
 
 const STORAGE_KEY = "energy-audit-floorplan-project";
 
@@ -12,7 +13,7 @@ export function loadProjectFromLocalStorage(): Project | null {
     return null;
   }
   try {
-    return JSON.parse(raw) as Project;
+    return importProjectFromJson(raw);
   } catch {
     return null;
   }
@@ -23,5 +24,17 @@ export function exportProjectAsJson(project: Project): string {
 }
 
 export function importProjectFromJson(raw: string): Project {
-  return JSON.parse(raw) as Project;
+  const project = JSON.parse(raw) as Project;
+  for (const floor of project.floors ?? []) {
+    for (const entity of floor.entities ?? []) {
+      if (entity.type === "rectangle" && isCapeCodCeiling(entity.metadata?.ceilingType)) {
+        capeCodAverageHeight(
+          getCapeCodGeometry(entity),
+          Number(entity.metadata.lowHeightFt ?? 8),
+          Number(entity.metadata.highHeightFt ?? 12),
+        );
+      }
+    }
+  }
+  return project;
 }

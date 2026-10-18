@@ -30,6 +30,12 @@ import { createEntityFromTool, createWallPoint, createWallSegment } from "../sta
 import { getToolDefinition } from "../tools/toolDefinitions";
 import { getUtilityIconByEntityType, isUtilityEntityType, isUtilityToolId } from "../assets/utilityIcons";
 import { inferFloorPresetFromName, isAtticPreset, isBasementPreset, sortFloorsByPresetOrder } from "../constants/floors";
+import {
+  CAPE_COD_MIN_SPAN_FT,
+  getCapeCodGeometry,
+  isCapeCodCeiling,
+  moveCapeCodDivider,
+} from "../utils/capeCodCeiling";
 import type { MapEntity, Orientation, Point, Project, ToolId, WallPoint, WallSegment } from "../types";
 import {
   clamp,
@@ -51,6 +57,7 @@ interface InteractionState {
     | "draw-rect"
     | "draw-line"
     | "resize-rect"
+    | "drag-cape-cod-divider"
     | "resize-window"
     | "resize-skylight";
   pointerId: number | null;
@@ -64,6 +71,8 @@ interface InteractionState {
   entitySnapshot?: MapEntity;
   pointSnapshot?: WallPoint;
   resizeHandle?: ResizeHandle;
+  dividerSide?: "start" | "end";
+  previewEntity?: MapEntity;
   dragStarted?: boolean;
   latestWorld?: Point;
 }
@@ -1070,11 +1079,12 @@ function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor
   const lowHeight = Number(entity.metadata.lowHeightFt ?? 8);
   const highHeight = Number(entity.metadata.highHeightFt ?? 12);
 
-  const xCenter = anchor?.x ?? entity.width / 2;
-  const yCenter = anchor?.y ?? entity.height / 2;
+  const capeCod = isCapeCodCeiling(ceilingType) ? getCapeCodGeometry(entity) : null;
+  const xCenter = capeCod ? entity.width / 2 : anchor?.x ?? entity.width / 2;
+  const yCenter = capeCod ? entity.height / 2 : anchor?.y ?? entity.height / 2;
   const inset = Math.min(1.2, Math.max(0.55, Math.min(overlayWidth, overlayHeight) * 0.18));
-  const isCathedralVertical = ceilingType === "cathedral";
-  const isCathedralHorizontal = ceilingType === "cathedral-horizontal";
+  const isCathedralVertical = ceilingType === "cathedral" || ceilingType === "cape-cod-horizontal";
+  const isCathedralHorizontal = ceilingType === "cathedral-horizontal" || ceilingType === "cape-cod";
   const isSlopedHorizontal = ceilingType === "sloped-horizontal";
   const isSlopedVertical = ceilingType === "sloped";
   const isSlopedOrCathedral =
@@ -1187,12 +1197,29 @@ function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor
     const rightArrowX = xCenter + centerGap;
     const topArrowY = yCenter - centerGap;
     const bottomArrowY = yCenter + centerGap;
+    const dividers = capeCod && (
+      <g className="cape-cod-dividers">
+        {[capeCod.slopeWidthFt, capeCod.spanFt - capeCod.slopeWidthFt].map((position, index) => (
+          <line
+            key={index}
+            x1={capeCod.horizontal ? 0 : position}
+            y1={capeCod.horizontal ? position : 0}
+            x2={capeCod.horizontal ? entity.width : position}
+            y2={capeCod.horizontal ? position : entity.height}
+            stroke={LINEAR_MARKER_COLOR}
+            strokeWidth={0.16}
+            strokeDasharray="0.45 0.3"
+          />
+        ))}
+      </g>
+    );
 
     if (isCathedralHorizontal) {
       const leftLowBadgeX = inset;
       const rightLowBadgeX = entity.width - inset;
       return (
         <g className="ceiling-overlay" pointerEvents="none">
+          {dividers}
           <line x1={inset} y1={horizontalDisplayY} x2={leftArrowX - arrowSize} y2={horizontalDisplayY} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
           <line x1={entity.width - inset} y1={horizontalDisplayY} x2={rightArrowX + arrowSize} y2={horizontalDisplayY} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
 
@@ -1218,6 +1245,7 @@ function RectangleCeilingOverlay({ entity, anchor }: { entity: MapEntity; anchor
 
     return (
       <g className="ceiling-overlay" pointerEvents="none">
+        {dividers}
         <line x1={verticalDisplayX} y1={inset} x2={verticalDisplayX} y2={topArrowY - arrowSize} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
         <line x1={verticalDisplayX} y1={entity.height - inset} x2={verticalDisplayX} y2={bottomArrowY + arrowSize} stroke={LINEAR_MARKER_COLOR} strokeWidth={0.18} />
 
@@ -1792,6 +1820,51 @@ function RectangleDragSizeCue({ rect }: { rect: RectBounds }) {
       >
         {`${fmtFeet(width)} x ${fmtFeet(height)}`}
       </text>
+    </g>
+  );
+}
+
+function CapeCodDividerSizeCue({ entity }: { entity: MapEntity }) {
+  const geometry = getCapeCodGeometry(entity);
+  const boundaries = [0, geometry.slopeWidthFt, geometry.spanFt - geometry.slopeWidthFt, geometry.spanFt];
+  const sectionNames = geometry.horizontal
+    ? ["Top outer section", "Center section", "Bottom outer section"]
+    : ["Left outer section", "Center section", "Right outer section"];
+
+  return (
+    <g
+      pointerEvents="none"
+      className="rect-drag-size-cue cape-cod-divider-size-cue"
+      transform={`translate(${entity.x} ${entity.y}) rotate(${entity.rotation})`}
+    >
+      {sectionNames.map((name, index) => {
+        const span = boundaries[index + 1] - boundaries[index];
+        const center = (boundaries[index] + boundaries[index + 1]) / 2;
+        const value = Number(span.toFixed(2));
+        const label = `${value}'`;
+        const width = geometry.horizontal ? entity.width : span;
+        const height = geometry.horizontal ? span : entity.height;
+        const fontSize = Math.max(0.46, Math.min(
+          clampValue(Math.min(width, height) * 0.42, 0.95, 5.4),
+          Math.max(0.4, width - 0.4) / (label.length * 0.62),
+        ));
+        return (
+          <text
+            key={name}
+            x={geometry.horizontal ? entity.width / 2 : center}
+            y={geometry.horizontal ? center : entity.height / 2}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            fill={LINEAR_MARKER_COLOR}
+            fontSize={fontSize}
+            fontWeight={900}
+            style={{ fontSize: `${fontSize}px` }}
+            aria-label={`${name}: ${value} feet`}
+          >
+            {label}
+          </text>
+        );
+      })}
     </g>
   );
 }
@@ -2822,6 +2895,9 @@ function buildSharedCeilingOverlayPlacement(rectangles: MapEntity[]): {
     const aRect = rectBoundsFromEntity(aEntity);
     for (let j = i + 1; j < conditioned.length; j += 1) {
       const bEntity = conditioned[j];
+      if (isCapeCodCeiling(aEntity.metadata.ceilingType) || isCapeCodCeiling(bEntity.metadata.ceilingType)) {
+        continue;
+      }
       if (getRectangleCeilingSignature(aEntity) !== getRectangleCeilingSignature(bEntity)) {
         continue;
       }
@@ -3944,13 +4020,13 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
   const activeToolIsLockable = isLockableTool(state.activeTool);
   const activeToolIsLocked = toolLockEnabled && lockedToolId === state.activeTool;
   const defaultDoorToolType = getDoorToolTypeFromMetadata(state.project.metadata);
-  const bumpOutFlatsFromMetadata = Number(state.project.metadata.bumpOutFlats ?? 5);
+  const bumpOutFlatsFromMetadata = Number(state.project.metadata.bumpOutFlats ?? 3);
   const defaultBumpOutFlats: BumpOutFlats =
     bumpOutFlatsFromMetadata === 3 || bumpOutFlatsFromMetadata === 4 || bumpOutFlatsFromMetadata === 5 || bumpOutFlatsFromMetadata === 6
       ? bumpOutFlatsFromMetadata
       : bumpOutFlatsFromMetadata === 7 || bumpOutFlatsFromMetadata === 9
         ? 6
-        : 5;
+        : 3;
   const defaultBumpOutLongEdgeFt = Math.max(3, Math.round(Number(state.project.metadata.bumpOutLongEdgeFt ?? 10)));
 
   const maybeAutoReturnToSelect = (toolId: ToolId) => {
@@ -4457,6 +4533,13 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
         dispatch({ type: "CLEAR_WALL_DRAFT" });
         dispatch({ type: "CLEAR_PREVIEW_ENTITY" });
         setDraftEntity(null);
+        if (interactionRef.current.type === "drag-cape-cod-divider") {
+          const pointerId = interactionRef.current.pointerId;
+          finishInteraction();
+          if (pointerId !== null && svgRef.current?.hasPointerCapture(pointerId)) {
+            svgRef.current.releasePointerCapture(pointerId);
+          }
+        }
       }
     };
 
@@ -4517,13 +4600,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
     heightFt: Math.max(1, Math.round(Math.abs(entity.height))),
     color: String(entity.metadata.color ?? "BLUE").toUpperCase(),
     unconditioned: Boolean(entity.metadata.unconditioned),
-    ceilingType: (entity.metadata.ceilingType ?? "standard") as
-      | "standard"
-      | "cathedral"
-      | "cathedral-horizontal"
-      | "sloped"
-      | "sloped-horizontal"
-      | "none",
+    ceilingType: entity.metadata.ceilingType ?? "standard",
     standardHeightFt: Number(entity.metadata.standardHeightFt ?? 8),
     lowHeightFt: Number(entity.metadata.lowHeightFt ?? 8),
     highHeightFt: Number(entity.metadata.highHeightFt ?? 12),
@@ -5492,6 +5569,28 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
       return;
     }
 
+    if (interaction.type === "drag-cape-cod-divider" && interaction.entitySnapshot && interaction.dividerSide) {
+      if (event.pointerId !== interaction.pointerId) {
+        return;
+      }
+      const entity = interaction.entitySnapshot;
+      const geometry = getCapeCodGeometry(entity);
+      const angle = entity.rotation * Math.PI / 180;
+      const dx = (event.clientX - interaction.startScreen.x) / state.camera.zoom;
+      const dy = (event.clientY - interaction.startScreen.y) / state.camera.zoom;
+      const deltaFt = geometry.horizontal
+        ? -dx * Math.sin(angle) + dy * Math.cos(angle)
+        : dx * Math.cos(angle) + dy * Math.sin(angle);
+      const centerRatio = moveCapeCodDivider(geometry, interaction.dividerSide, deltaFt);
+      const preview: MapEntity = {
+        ...entity,
+        metadata: { ...entity.metadata, capeCodCenterRatio: centerRatio },
+      };
+      interaction.previewEntity = preview;
+      dispatch({ type: "SET_PREVIEW_ENTITY", entity: preview });
+      return;
+    }
+
     if (interaction.type === "drag-entity" && interaction.targetId && interaction.entitySnapshot) {
       interaction.latestWorld = world;
 
@@ -5750,6 +5849,20 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
               floor.entities,
             )
           : resizedRect;
+      if (isCapeCodCeiling(interaction.entitySnapshot.metadata.ceilingType)) {
+        const horizontal = interaction.entitySnapshot.metadata.ceilingType === "cape-cod-horizontal";
+        if (horizontal && nextRect.height < CAPE_COD_MIN_SPAN_FT) {
+          if (interaction.resizeHandle.includes("n")) {
+            nextRect.y = sourceRect.y + sourceRect.height - CAPE_COD_MIN_SPAN_FT;
+          }
+          nextRect.height = CAPE_COD_MIN_SPAN_FT;
+        } else if (!horizontal && nextRect.width < CAPE_COD_MIN_SPAN_FT) {
+          if (interaction.resizeHandle.includes("w")) {
+            nextRect.x = sourceRect.x + sourceRect.width - CAPE_COD_MIN_SPAN_FT;
+          }
+          nextRect.width = CAPE_COD_MIN_SPAN_FT;
+        }
+      }
       const updated: MapEntity =
         interaction.entitySnapshot.type === "skylight"
           ? {
@@ -6103,6 +6216,27 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
 
     const interaction = interactionRef.current;
 
+    if (interaction.type === "drag-cape-cod-divider") {
+      if (event.pointerId !== interaction.pointerId) {
+        return;
+      }
+      const preview = interaction.previewEntity;
+      if (
+        event.type !== "pointercancel" &&
+        preview &&
+        interaction.entitySnapshot &&
+        getCapeCodGeometry(preview).centerRatio !== getCapeCodGeometry(interaction.entitySnapshot).centerRatio
+      ) {
+        dispatch({ type: "UPSERT_ENTITY", entity: preview });
+      }
+      dispatch({ type: "CLEAR_PREVIEW_ENTITY" });
+      finishInteraction();
+      if (svgRef.current?.hasPointerCapture(event.pointerId)) {
+        svgRef.current.releasePointerCapture(event.pointerId);
+      }
+      return;
+    }
+
     if (
       interaction.type === "pan" &&
       interaction.tapAction === "deselect-empty" &&
@@ -6392,6 +6526,11 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
           }
         }
         dispatch({ type: "SET_SELECTION", selection: { kind: "entity", id: nextEntity.id } });
+        if (isCapeCodCeiling(nextEntity.metadata.ceilingType)) {
+          setRectangleModalState((current) => current?.entityId === nextEntity.id
+            ? { ...current, initialValues: getRectangleModalInitialValues(nextEntity) }
+            : current);
+        }
       }
     }
 
@@ -7000,6 +7139,32 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
     svgRef.current?.setPointerCapture(event.pointerId);
   };
 
+  const startCapeCodDividerDrag = (
+    event: ReactPointerEvent<SVGElement>,
+    entity: MapEntity,
+    side: "start" | "end",
+  ) => {
+    event.stopPropagation();
+    event.preventDefault();
+    if (event.button !== 0 || registerTouchPointer(event)) {
+      return;
+    }
+    clearLongPress();
+    setHoveredSelectedEntityId(null);
+    interactionRef.current = {
+      type: "drag-cape-cod-divider",
+      pointerId: event.pointerId,
+      pointerType: event.pointerType,
+      startScreen: { x: event.clientX, y: event.clientY },
+      startWorld: getEventWorld(event),
+      targetId: entity.id,
+      entitySnapshot: entity,
+      dividerSide: side,
+    };
+    svgRef.current?.setPointerCapture(event.pointerId);
+    dispatch({ type: "SET_PREVIEW_ENTITY", entity });
+  };
+
   const startWindowResize = (
     event: ReactPointerEvent<SVGElement>,
     entity: MapEntity,
@@ -7485,7 +7650,9 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
     state.selection.kind === "entity" &&
     hoveredSelectedEntityId !== null &&
     hoveredSelectedEntityId === state.selection.id;
-  const showMoveCursorOverlay = !showResizeCursorOverlay && (draggingEntity || hoveringSelectedEntity);
+  const showMoveCursorOverlay =
+    interactionRef.current.type !== "drag-cape-cod-divider" &&
+    !showResizeCursorOverlay && (draggingEntity || hoveringSelectedEntity);
   const moveCursorWorld = interactionRef.current.latestWorld ?? hoverWorld;
   const moveCursorScreen = pointerScreen ??
     (moveCursorWorld
@@ -7749,7 +7916,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
   const showFocusOverlay =
     Boolean(focusOverlayPath) &&
     state.selection.kind !== "none" &&
-    interactionRef.current.type === "none";
+    (interactionRef.current.type === "none" || interactionRef.current.type === "drag-cape-cod-divider");
 
   const focusModeSizeCue = useMemo<{
     x: number;
@@ -9243,7 +9410,7 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
             />
           )}
 
-          {focusModeSizeCue && (
+          {focusModeSizeCue && interactionRef.current.type !== "drag-cape-cod-divider" && (
             <g pointerEvents="none" className="rect-drag-size-cue">
               <text
                 x={focusModeSizeCue.x}
@@ -9259,6 +9426,75 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
               </text>
             </g>
           )}
+
+          {interactionRef.current.type === "drag-cape-cod-divider" &&
+            state.previewEntity &&
+            state.previewEntity.id === interactionRef.current.targetId && (
+              <CapeCodDividerSizeCue entity={state.previewEntity} />
+            )}
+
+          {selectedRectangleEntity && (() => {
+            if (!showFocusOverlay || isActiveFloorAttic || !isCapeCodCeiling(selectedRectangleEntity.metadata.ceilingType)) {
+              return null;
+            }
+            const entity = state.previewEntity?.id === selectedRectangleEntity.id
+              ? state.previewEntity
+              : selectedRectangleEntity;
+            const geometry = getCapeCodGeometry(entity);
+            return (
+              <g
+                className="cape-cod-divider-handles"
+                transform={`translate(${entity.x} ${entity.y}) rotate(${entity.rotation})`}
+              >
+                {(["start", "end"] as const).map((side) => {
+                  const position = side === "start" ? geometry.slopeWidthFt : geometry.spanFt - geometry.slopeWidthFt;
+                  return (
+                    <line
+                      key={side}
+                      x1={geometry.horizontal ? 0 : position}
+                      y1={geometry.horizontal ? position : 0}
+                      x2={geometry.horizontal ? entity.width : position}
+                      y2={geometry.horizontal ? position : entity.height}
+                      stroke="transparent"
+                      strokeWidth={Math.max(0.8, 16 / state.camera.zoom)}
+                      pointerEvents="stroke"
+                      style={{ cursor: geometry.horizontal ? "ns-resize" : "ew-resize" }}
+                      role="slider"
+                      tabIndex={0}
+                      aria-label={`Cape Cod ${side} divider`}
+                      aria-orientation={geometry.horizontal ? "vertical" : "horizontal"}
+                      aria-valuemin={side === "start" ? 2 : (geometry.spanFt + 2) / 2}
+                      aria-valuemax={side === "start" ? (geometry.spanFt - 2) / 2 : geometry.spanFt - 2}
+                      aria-valuenow={position}
+                      aria-valuetext={`${geometry.centerWidthFt} feet flat center`}
+                      onPointerEnter={() => setHoveredSelectedEntityId(null)}
+                      onPointerDown={(event) => startCapeCodDividerDrag(event, entity, side)}
+                      onDoubleClick={(event) => event.stopPropagation()}
+                      onKeyDown={(event) => {
+                        const delta = event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1
+                          : event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : 0;
+                        if (!delta) {
+                          return;
+                        }
+                        event.preventDefault();
+                        event.stopPropagation();
+                        dispatch({
+                          type: "UPSERT_ENTITY",
+                          entity: {
+                            ...entity,
+                            metadata: {
+                              ...entity.metadata,
+                              capeCodCenterRatio: moveCapeCodDivider(geometry, side, delta),
+                            },
+                          },
+                        });
+                      }}
+                    />
+                  );
+                })}
+              </g>
+            );
+          })()}
 
           {selectedRectangleEntity && (() => {
             const rect = rectBoundsFromEntity(selectedRectangleEntity);
@@ -10157,6 +10393,15 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
             standardHeightFt: isActiveFloorAttic ? 8 : payload.standardHeightFt,
             lowHeightFt: isActiveFloorAttic ? 8 : payload.lowHeightFt,
             highHeightFt: isActiveFloorAttic ? 12 : payload.highHeightFt,
+            ...(isCapeCodCeiling(payload.ceilingType)
+              ? {
+                  capeCodCenterRatio: existing.metadata.capeCodCenterRatio ?? getCapeCodGeometry({
+                    width: payload.widthFt,
+                    height: payload.heightFt,
+                    metadata: { ceilingType: payload.ceilingType },
+                  }).centerRatio,
+                }
+              : {}),
           };
 
           const isBumpOut = isBumpOutRectangle(existing);
@@ -10207,6 +10452,16 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
               ...metadata,
             },
           };
+          if (
+            existing.label === updated.label &&
+            existing.x === updated.x &&
+            existing.y === updated.y &&
+            existing.width === updated.width &&
+            existing.height === updated.height &&
+            Object.entries(updated.metadata).every(([key, value]) => existing.metadata[key] === value)
+          ) {
+            return;
+          }
           dispatch({ type: "UPSERT_ENTITY", entity: updated });
 
           if (isBumpOutRectangle(updated)) {
@@ -10249,6 +10504,15 @@ export function Workspace({ resetNavigationSignal = 0 }: WorkspaceProps) {
             standardHeightFt: isActiveFloorAttic ? 8 : payload.standardHeightFt,
             lowHeightFt: isActiveFloorAttic ? 8 : payload.lowHeightFt,
             highHeightFt: isActiveFloorAttic ? 12 : payload.highHeightFt,
+            ...(isCapeCodCeiling(payload.ceilingType)
+              ? {
+                  capeCodCenterRatio: getCapeCodGeometry({
+                    width: payload.widthFt,
+                    height: payload.heightFt,
+                    metadata: { ceilingType: payload.ceilingType },
+                  }).centerRatio,
+                }
+              : {}),
           };
 
           if (rectangleModalState.mode === "edit" && rectangleModalState.entityId) {

@@ -330,6 +330,7 @@ function applyExportThemePreset(svg: SVGSVGElement, preset: ExportPdfThemePreset
 function applyExportVisibilityOptions(svg: SVGSVGElement, options: ExportPdfStyleOptions): void {
   // Always exclude the supporting-floor ghost overlay from PDF captures.
   removeElementsBySelector(svg, ".workspace-floorplan-ghost");
+  removeElementsBySelector(svg, ".cape-cod-divider-handles, .cape-cod-divider-size-cue");
 
   if (options.hideGrid) {
     for (const line of getGridLines(svg)) {

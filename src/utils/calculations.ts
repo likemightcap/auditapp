@@ -1,5 +1,6 @@
 import type { FloorData, FloorPreset, MapEntity, Orientation, Project, WallPoint } from "../types";
-import { inferFloorPresetFromName, isAtticPreset, isBasementPreset, sortFloorsByPresetOrder } from "../constants/floors";
+import { inferFloorPresetFromName, isAtticPreset, isBasementPreset, sortFloorsByPresetOrder } from "../constants/floors.ts";
+import { capeCodAverageHeight, getCapeCodGeometry, isCapeCodCeiling } from "./capeCodCeiling.ts";
 
 interface FloorMetrics {
   wallLoopAreaFt2: number;
@@ -810,12 +811,17 @@ function ceilingAverageHeight(entity: MapEntity): number {
   if (ceilingType === "standard") {
     return Math.max(1, standardHeightFt);
   }
+  if (isCapeCodCeiling(ceilingType)) {
+    return capeCodAverageHeight(getCapeCodGeometry(entity), lowHeightFt, highHeightFt);
+  }
   return (Math.max(1, lowHeightFt) + Math.max(1, highHeightFt)) / 2;
 }
 
 function computeFloorMetrics(floor: FloorData, previewEntity: MapEntity | null = null): FloorMetrics {
-  const rectangles = floor.entities.filter((entity) => entity.type === "rectangle");
-  if (previewEntity?.type === "rectangle") {
+  const rectangles = floor.entities
+    .filter((entity) => entity.type === "rectangle")
+    .map((entity) => entity.id === previewEntity?.id ? previewEntity : entity);
+  if (previewEntity?.type === "rectangle" && !rectangles.some((entity) => entity.id === previewEntity.id)) {
     rectangles.push(previewEntity);
   }
 
@@ -830,6 +836,7 @@ function computeFloorMetrics(floor: FloorData, previewEntity: MapEntity | null =
     const { x1, y1, x2, y2 } = rectBounds(rect);
     const bumpOutPolygon = isBumpOutRectangle(rect) ? bumpOutWorldPolygon(rect) : null;
     const averageHeightFt = ceilingAverageHeight(rect);
+    const capeCod = isCapeCodCeiling(rect.metadata.ceilingType) ? getCapeCodGeometry(rect) : null;
     const hasCeiling = (rect.metadata.ceilingType ?? "standard") !== "none";
 
     for (let x = x1; x < x2; x += 1) {
@@ -841,7 +848,19 @@ function computeFloorMetrics(floor: FloorData, previewEntity: MapEntity | null =
         coveredCells.add(key);
         if (hasCeiling) {
           // Newer rectangles overwrite overlapped cells, matching visual stacking intent.
-          cellCeilingHeights.set(key, averageHeightFt);
+          const cellStart = capeCod?.horizontal ? y - y1 : x - x1;
+          cellCeilingHeights.set(
+            key,
+            capeCod
+              ? capeCodAverageHeight(
+                  capeCod,
+                  Number(rect.metadata.lowHeightFt ?? 8),
+                  Number(rect.metadata.highHeightFt ?? 12),
+                  cellStart,
+                  cellStart + 1,
+                )
+              : averageHeightFt,
+          );
         }
       }
     }
@@ -910,7 +929,7 @@ export function calculateProjectMetrics(project: Project, previewEntity: MapEnti
       continue;
     }
 
-    const metrics = computeFloorMetrics(floor);
+    const metrics = computeFloorMetrics(floor, floor.id === activeFloor?.id ? previewEntity : null);
     const floorAreaFt2 = metrics.wallLoopAreaFt2 > 0 ? metrics.wallLoopAreaFt2 : metrics.rectangleAreaFt2;
     conditionedAreaFt2 += floorAreaFt2;
 
